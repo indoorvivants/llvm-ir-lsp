@@ -1,6 +1,6 @@
 //> using lib "org.typelevel::cats-parse::0.3.8"
 //> using scala "3.2.0"
-//> using lib "com.lihaoyi::pprint::0.7.0"
+
 import cats.parse.Parser as P
 import cats.parse.Parser0 as P0
 import cats.parse.Caret

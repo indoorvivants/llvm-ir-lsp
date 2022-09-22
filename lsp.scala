@@ -1,4 +1,4 @@
-//> using lib "tech.neander::langoustine-app:0.0.16"
+//> using lib "tech.neander::langoustine-app::0.0.16"
 
 import langoustine.lsp.app.*
 import langoustine.lsp.all.*

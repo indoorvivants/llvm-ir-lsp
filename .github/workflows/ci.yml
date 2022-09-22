@@ -17,7 +17,9 @@ jobs:
       - uses: VirtusLab/scala-cli-setup@main
 
       - name: test
-        run: scala-cli test .
+        run: make test
 
       - name: package
-        run: scala-cli package . --native -f -o LLVM_LanguageServer
+        env:
+          RELEASE_MODE: release-fast
+        run: make lsp

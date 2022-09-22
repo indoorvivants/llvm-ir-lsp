@@ -1,4 +1,5 @@
 .bsp
 .metals
 .scala-build
+bin/
 
