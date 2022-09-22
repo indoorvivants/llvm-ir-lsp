@@ -1,6 +1,7 @@
 opaque type Id = Int
 object Id:
   inline def apply(i: Int): Id = i
+  extension (id: Id) inline def value: Int = id
 
 opaque type FieldName = String
 object FieldName:

@@ -1,6 +1,6 @@
 //> using lib "org.typelevel::cats-parse::0.3.8"
 //> using scala "3.2.0"
-
+//> using lib "com.lihaoyi::pprint::0.7.0"
 import cats.parse.Parser as P
 import cats.parse.Parser0 as P0
 import cats.parse.Caret
@@ -41,22 +41,26 @@ object parsers:
 
   val const = alphanumeric.map(Atom.Const(_))
   val id = integer.map(Id.apply(_))
-  val ref = (P.char('!') *> id).map(Atom.Ref.apply(_): Atom.Ref)
+  val ref = (EXCL *> id).map(Atom.Ref.apply(_): Atom.Ref)
   val num = (((P.charIn('i', 'u') ~ integer)
     .map((c, i) => s"$c$i") <* sp.rep.void) ~ integer).map((sz, i) =>
     Atom.Num(i, sz)
   ) orElse integer.map(Atom.Num.apply(_, "i32"))
   val string =
-    P.charsWhile(_ != '"').surroundedBy(P.char('"')).map(Atom.Str.apply)
+    (EXCL *> P
+      .charsWhile(_ != '"')
+      .surroundedBy(P.char('"'))
+      .map(Atom.Str.apply)).backtrack orElse
+      P.charsWhile(_ != '"').surroundedBy(P.char('"')).map(Atom.Str.apply)
 
   // composite expressions
 
   // expression
   val expr = P.recursive[Expression[WithSpan]] { recurse =>
     val e = recurse.surroundedBy(sp.rep0)
+
     val bag = EXCL *>
-      recurse.span
-        .surroundedBy(sp.rep0)
+      e.span
         .repSep0(COMMA)
         .between(LB, RB)
         .map(_.toVector)
@@ -81,27 +85,32 @@ object parsers:
   }
 
   // assignment
-  val assignment: P[Statement] =
-    ((withSpan(ref) <* sp.? <* ASS) ~ withSpan(expr))
+  val debugAssignment =
+    ((withSpan(ref) <* sp.? <* ASS) ~ withSpan(expr).surroundedBy(sp.rep0))
       .map((rf, expr) => Statement.Assignment.apply(rf, expr))
       .surroundedBy(sp.rep0)
 
   // whole section
   val sep = crlf orElse lf
 
-  val statement = withSpan(assignment)
+  val statement =
+    withSpan(debugAssignment).map(Right(_)).backtrack orElse
+      P.charsWhile(_ != '\n').map(Left(_))
 
   val statements = statement
     .repSep0(sep.rep)
     .surroundedBy(sep.rep0)
 
-  val program = statements.map(_.toVector).map(Program.apply)
+  val program = statements
+    .map(_.toVector)
+    .map(_.collect { case Right(v) => v })
+    .map(Program.apply)
 
-  inline def LP = P.char('(').surroundedBy(sp.rep0)
-  inline def RP = P.char(')').surroundedBy(sp.rep0)
-  inline def LB = P.char('{').surroundedBy(sp.rep0)
-  inline def RB = P.char('}').surroundedBy(sp.rep0)
-  inline def ASS = P.char('=').surroundedBy(sp.rep0)
+  inline def LP = P.char('(')
+  inline def RP = P.char(')')
+  inline def LB = P.char('{')
+  inline def RB = P.char('}')
+  inline def ASS = P.char('=')
   inline def SEMICOLON = P.char(';')
   inline def COLON = P.char(':')
   inline def EXCL = P.char('!')
@@ -110,7 +119,9 @@ object parsers:
   inline def integer = P.charsWhile(_.isDigit).map(_.toInt)
 
   inline def alphanumeric =
-    (P.charWhere(_.isLetter) ~ P.charsWhile0(_.isLetter)).map(_.toString + _)
+    (P.charWhere(_.isLetter) ~ P.charsWhile0(c =>
+      c.isLetterOrDigit || c == '_'
+    )).map(_.toString + _)
 
   case class ParsingError(caret: Caret, text: String) {
     override def toString() =
@@ -120,15 +131,15 @@ object parsers:
   }
 
   def parse(s: String): Either[ParsingError, Program] =
-    parseWithPosition(statements.map(_.toVector).map(Program.apply(_)), s)
+    parseWithPosition(program, s)
 
   def parseExpr(s: String): Either[ParsingError, Expression[WithSpan]] =
     parseWithPosition(expr, s)
 
-  def parseStatement(
-      s: String
-  ): Either[ParsingError, WithSpan[Statement]] =
-    parseWithPosition(statement, s)
+  // def parseStatement(
+  //     s: String
+  // ): Either[ParsingError, WithSpan[Statement]] =
+  //   parseWithPosition(statement, s)
 
   private def parseWithPosition[A](
       p: P0[A] | P[A],
@@ -149,17 +160,58 @@ object parsers:
       ParsingError(Caret(line, col, offset), s)
     }
 
-@main def hello =
-  import parsers._
-  def p(str: String) = parse(str) match
-    case Left(value)  => println(value)
-    case Right(value) => println(value)
+// @main def hello =
+//   import parsers._
+//   def p(str: String) = parse(str) match
+//     case Left(value)  => println(value)
+//     case Right(value) => println(value)
 
-  p("!25 = DWARF")
-  p("!25 = \"DWARF\"")
-  p("!25 = 25")
-  p("!25 = !25")
-  p("!25 = i8 5")
-  p("!25 = !DiLocalVariable(a: 5)")
-  p("!25 = distinct !DiLocalVariable(a: 5)")
-  p("!25 = !{ i32 5, \"Dwarf Version\", 3}")
+//   // p("!25 = DWARF")
+//   // p("!25 = \"DWARF\"")
+//   // p("!25 = 25")
+//   // p("!25 = !25")
+//   // p("!25 = i8 5")
+//   // p("!25 = !DiLocalVariable(a: !{25})")
+//   // p("!25 = distinct !DiLocalVariable(a: 5)")
+//   // p("!25 = !{ i32 5, \"Dwarf Version\", 3}")
+
+//   val lines = """
+// !0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 15.0.0 (https://github.com/llvm/llvm-project.git 4ba6a9c9f65bbc8bd06e3652cb20fd4dfc846137)", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
+// !1 = !DIFile(filename: "/app/example.cpp", directory: "/app")
+// !2 = !{i32 7, !"Dwarf Version", i32 4}
+// !3 = !{i32 2, !"Debug Info Version", i32 3}
+// !4 = !{i32 1, !"wchar_size", i32 4}
+// !5 = !{i32 7, !"PIC Level", i32 2}
+// !6 = !{i32 7, !"PIE Level", i32 2}
+// !7 = !{i32 7, !"uwtable", i32 2}
+// !8 = !{i32 7, !"frame-pointer", i32 2}
+// !9 = !{!"clang version 15.0.0 (https://github.com/llvm/llvm-project.git 4ba6a9c9f65bbc8bd06e3652cb20fd4dfc846137)"}
+// !10 = distinct !DISubprogram(name: "t", linkageName: "_Z1tf", scope: !11, file: !11, line: 2, type: !12, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !15)
+// !11 = !DIFile(filename: "example.cpp", directory: "/app")
+// !12 = !DISubroutineType(types: !13)
+// !13 = !{!14, !14}
+// !14 = !DIBasicType(name: "float", size: 32, encoding: DW_ATE_float)
+// !15 = !{}
+// !16 = !DILocalVariable(name: "b", arg: 1, scope: !10, file: !11, line: 2, type: !14)
+// !17 = !DILocation(line: 2, column: 15, scope: !10)
+// !18 = !DILocation(line: 3, column: 12, scope: !10)
+// !19 = !DILocation(line: 3, column: 14, scope: !10)
+// !20 = !DILocation(line: 3, column: 5, scope: !10)
+// !21 = distinct !DISubprogram(name: "square", linkageName: "_Z6squarei", scope: !11, file: !11, line: 6, type: !22, scopeLine: 6, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !15)
+// !22 = !DISubroutineType(types: !23)
+// !23 = !{!24, !24}
+// !24 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+// !25 = !DILocalVariable(name: "num", arg: 1, scope: !21, file: !11, line: 6, type: !24)
+// !26 = !DILocation(line: 6, column: 16, scope: !21)
+// !27 = !DILocalVariable(name: "x", scope: !21, file: !11, line: 7, type: !14)
+// !28 = !DILocation(line: 7, column: 11, scope: !21)
+// !29 = !DILocation(line: 7, column: 17, scope: !21)
+// !30 = !DILocation(line: 7, column: 15, scope: !21)
+// !31 = !DILocation(line: 8, column: 12, scope: !21)
+// !32 = !DILocation(line: 8, column: 18, scope: !21)
+// !33 = !DILocation(line: 8, column: 16, scope: !21)
+// !34 = !DILocation(line: 8, column: 5, scope: !21)
+// """.trim.linesIterator.foreach { l =>
+//     println(Console.BOLD + l + Console.RESET)
+//     p(l)
+//   }
