@@ -24,4 +24,6 @@ jobs:
       - name: package
         env:
           RELEASE_MODE: release-fast
-        run: make lsp
+        run: |
+          export BUILD_SUFFIX=$(scala-cli -e 'println("-" + com.indoorvivants.detective.Platform.os.coursierString)' -d com.indoorvivants.detective::platform:0.0.2)
+          make lsp

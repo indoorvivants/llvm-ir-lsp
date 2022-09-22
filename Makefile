@@ -1,5 +1,5 @@
 RELEASE_MODE ?= debug
-
+BUILD_SUFFIX ?= 
 all: lsp test
 
 clean:
@@ -8,7 +8,7 @@ clean:
 
 bin/LLVM_LanguageServer:
 	mkdir -p bin
-	scala-cli package . -M LLVM_Lsp --native-mode $(RELEASE_MODE) --native  -f -o bin/LLVM_LanguageServer
+	scala-cli package . -M LLVM_Lsp --native-mode $(RELEASE_MODE) --native  -f -o bin/LLVM_LanguageServer$(BUILD_SUFFIX)
 
 test:
 	scala-cli test .
