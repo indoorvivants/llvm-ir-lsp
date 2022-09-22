@@ -13,7 +13,10 @@ jobs:
           distribution: 'temurin' 
           java-version: '17'
 
-      - uses: VirtusLab/scala-cli-setup@main
+      - name: Setup Scala CLI
+        run: |
+          sudo curl -Lo /usr/bin/scala-cli https://raw.githubusercontent.com/VirtusLab/scala-cli/main/scala-cli.sh && \
+          sudo chmod +x /usr/bin/scala-cli
 
       - name: test
         run: make test
