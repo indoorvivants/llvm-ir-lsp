@@ -1,5 +1,6 @@
 RELEASE_MODE ?= debug
-BUILD_SUFFIX ?= 
+
+
 all: lsp test
 
 clean:
