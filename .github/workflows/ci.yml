@@ -18,8 +18,8 @@ jobs:
 
       - name: Setup Scala CLI
         run: |
-          sudo curl -Lo /usr/bin/scala-cli https://raw.githubusercontent.com/VirtusLab/scala-cli/main/scala-cli.sh && \
-          sudo chmod +x /usr/bin/scala-cli
+          sudo curl -Lo /usr/local/bin/scala-cli https://raw.githubusercontent.com/VirtusLab/scala-cli/main/scala-cli.sh && \
+          sudo chmod +x /usr/local/bin/scala-cli
 
       - name: test
         run: make test
