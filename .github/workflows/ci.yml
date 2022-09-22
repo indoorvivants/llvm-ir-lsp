@@ -6,7 +6,9 @@ jobs:
     name: CI (${{ matrix.os }})
     strategy:
       fail-fast: false
-    runs-on: [ubuntu-latest, macos-latest]
+      matrix:
+        os: [macos-11, ubuntu-20.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-java@v3
@@ -33,4 +35,24 @@ jobs:
         with:
           name: binaries 
           path: bin/LLVM_LanguageServer* 
-          if-no-files-found: error
+          if-no-files-found: error # 'warn' or 'ignore' are also available, defaults to `warn`
+
+  release:
+    needs: [build]
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 
+
+      - name: Download binaries
+        uses: actions/download-artifact@v2
+        id: download
+        with:
+          path: binaries
+
+      - run: ls -lR binaries
+
+
