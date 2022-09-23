@@ -28,6 +28,7 @@ jobs:
 
       - name: package
         run: |
+          set -e
           export RELEASE_MODE=$(scala-cli build/script.scala -- release-mode)
           export BUILD_SUFFIX=$(scala-cli build/script.scala -- build-suffix)
           make lsp
