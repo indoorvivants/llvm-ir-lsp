@@ -28,7 +28,7 @@ extension (s: Span)
   def toRange: Range = Range(s.from.toPosition, s.to.toPosition)
 
 extension (s: Position)
-  def toCaret(offset: Int = -1) =
+  def toCaret(offset: Int) =
     cats.parse.Caret(s.line.value, s.character.value, offset)
 
 case class Index(
@@ -75,17 +75,7 @@ def index(text: String, p: Program): Index =
   )
 
 def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
-  def get(u: DocumentUri) =
-    state.get.flatMap(
-      _.get(u)
-        .map(IO.pure)
-        .getOrElse(
-          IO.raiseError(
-            new RuntimeException(s"No valid document found for ${u}")
-          )
-        )
-    )
-
+  val utils = Utils(state)
   LSPBuilder
     .create[IO]
     .handleRequest(initialize) { in =>
@@ -102,19 +92,8 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
       }
     }
     .handleRequest(textDocument.definition) { in =>
-      get(in.params.textDocument.uri).map { idx =>
-        val lineSpan = idx.text.lines(in.params.position.line.value)
-
-        val cursorPosition =
-          lineSpan.from.offset + in.params.position.character.value
-
-        val resolved = idx.detectReferences.resolve(
-          in.params.position.toCaret(cursorPosition)
-        )
-
-        val definedAt = resolved.flatMap(idx.definitions.get)
-
-        definedAt match
+      utils.get(in.params.textDocument.uri).flatMap { idx =>
+        utils.definitionSpan(idx, in.params.position).map {
           case head :: tail =>
             if tail.nonEmpty then
               scribe.warn(s"Unexpectedly, got several definitions: $tail")
@@ -125,52 +104,41 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
           case Nil =>
             Opt.empty
 
+        }
       }
     }
     .handleRequest(textDocument.hover) { in =>
-      get(in.params.textDocument.uri).map { idx =>
-        val lineSpan = idx.text.lines(in.params.position.line.value)
-
-        val cursorPosition =
-          lineSpan.from.offset + in.params.position.character.value
-
-        val resolved = idx.detectReferences.resolve(
-          in.params.position.toCaret(cursorPosition)
-        )
-
-        val definedAt = resolved.flatMap(idx.definitions.get)
-
-        definedAt match
+      utils.get(in.params.textDocument.uri).flatMap { idx =>
+        utils.definitionSpan(idx, in.params.position).map {
           case head :: tail =>
             if tail.nonEmpty then
               scribe.warn(s"Unexpectedly, got several definitions: $tail")
 
             Opt(
               Hover(
-                contents =
-                  MarkedString(MarkedString.S0(language = "llvm", idx.text.sliceOut(head))),
+                contents = MarkedString(
+                  MarkedString.S0(language = "llvm", idx.text.sliceOut(head))
+                ),
                 range = Opt(head.toRange)
               )
             )
           case Nil =>
             Opt.empty
-
+        }
       }
     }
     .handleRequest(textDocument.documentSymbol) { in =>
-      state.get.map(_.get(in.params.textDocument.uri)).map {
-        case None => Opt(Vector.empty)
-        case Some(idx) =>
-          Opt {
-            idx.definitions.toVector.sortBy(_._1.id.value).map {
-              case (ref, span) =>
-                SymbolInformation(
-                  name = s"!${ref.id}",
-                  location = Location(in.params.textDocument.uri, span.toRange),
-                  kind = SymbolKind.Variable
-                )
-            }
+      utils.get(in.params.textDocument.uri).map { idx =>
+        Opt {
+          idx.definitions.toVector.sortBy(_._1.id.value).map {
+            case (ref, span) =>
+              SymbolInformation(
+                name = s"!${ref.id}",
+                location = Location(in.params.textDocument.uri, span.toRange),
+                kind = SymbolKind.Variable
+              )
           }
+        }
       }
     }
     .handleNotification(textDocument.didOpen) { in =>
@@ -210,6 +178,28 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
         }
     }
 
+class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
+  def get(u: DocumentUri) =
+    state.get.flatMap(
+      _.get(u)
+        .map(IO.pure)
+        .getOrElse(
+          IO.raiseError(
+            new RuntimeException(s"No valid document found for ${u}")
+          )
+        )
+    )
+  def definitionSpan(idx: Index, position: Position) =
+    val lineSpan = idx.text.lines(position.line.value)
+
+    val cursorPosition =
+      lineSpan.from.offset + position.character.value
+
+    val resolved = idx.detectReferences.resolve(
+      position.toCaret(cursorPosition)
+    )
+
+    IO.pure(resolved.flatMap(idx.definitions.get))
 
 extension (back: Communicate[IO])
   def sendMessage(
