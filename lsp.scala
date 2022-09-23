@@ -14,6 +14,7 @@ import jsonrpclib.fs2._
 import langoustine.lsp.Communicate
 import fs2.io.file.Files
 import fs2.io.file.Path
+import langoustine.lsp.aliases.MarkedString.apply
 
 object LLVM_Lsp extends LangoustineApp.Simple:
   def server: IO[LSPBuilder[cats.effect.IO]] =
@@ -27,17 +28,64 @@ extension (s: Span)
   def toRange: Range = Range(s.from.toPosition, s.to.toPosition)
 
 extension (s: Position)
-  def toCaret = cats.parse.Caret(s.line.value, s.character.value, -1)
+  def toCaret(offset: Int = -1) =
+    cats.parse.Caret(s.line.value, s.character.value, offset)
 
-case class Index(definitions: Map[Atom.Ref, Span])
+case class Index(
+    definitions: Map[Atom.Ref, Span],
+    detectReferences: IntervalTree[Atom.Ref],
+    text: TextIndex
+)
 
-def index(p: Program): Index =
-  Index(p.asses.collect {
+def index(text: String, p: Program): Index =
+  val defns = p.asses.collect {
     case WithSpan(span, Statement.Assignment(spannedId, spannedExpr)) =>
       spannedId.value -> span
-  }.toMap)
+  }
+
+  def extractReferences(
+      expression: WithSpan[Expression[WithSpan]]
+  ): Vector[WithSpan[SpannedTree.Atom.Ref]] =
+    def go(e: WithSpan[Expression[WithSpan]]): Vector[WithSpan[Atom.Ref]] =
+      import SpannedTree.*
+
+      e.value match
+        case NamedData(struct, fields) =>
+          fields.collect { case Field.KeyValue(name, value) =>
+            go(value)
+          }.flatten
+        case Bag(exprs)     => exprs.flatMap(go)
+        case Distinct(expr) => go(expr)
+        case rf: Atom.Ref   => Vector(e.copy(value = rf))
+        case _              => Vector.empty
+
+    go(expression)
+
+  val occurrences = p.asses
+    .flatMap { case WithSpan(_, value) =>
+      value match
+        case Statement.Assignment(id, value) => extractReferences(value)
+    }
+    .map { ws => ws.span -> ws.value }
+
+  Index(
+    defns.toMap,
+    IntervalTree.construct(occurrences.toMap),
+    TextIndex.construct(text)
+  )
 
 def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
+  def get(u: DocumentUri) =
+    state.get.flatMap(
+      _.get(u)
+        .map(IO.pure)
+        .getOrElse(
+          IO.raiseError(
+            new RuntimeException(s"No valid document found for ${u}")
+          )
+        )
+    )
+
   LSPBuilder
     .create[IO]
     .handleRequest(initialize) { in =>
@@ -51,6 +99,62 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
           ),
           serverInfo = Opt(InitializeResult.ServerInfo("LLVM LSP"))
         )
+      }
+    }
+    .handleRequest(textDocument.definition) { in =>
+      get(in.params.textDocument.uri).map { idx =>
+        val lineSpan = idx.text.lines(in.params.position.line.value)
+
+        val cursorPosition =
+          lineSpan.from.offset + in.params.position.character.value
+
+        val resolved = idx.detectReferences.resolve(
+          in.params.position.toCaret(cursorPosition)
+        )
+
+        val definedAt = resolved.flatMap(idx.definitions.get)
+
+        definedAt match
+          case head :: tail =>
+            if tail.nonEmpty then
+              scribe.warn(s"Unexpectedly, got several definitions: $tail")
+
+            Opt(
+              Definition(Location(in.params.textDocument.uri, head.toRange))
+            )
+          case Nil =>
+            Opt.empty
+
+      }
+    }
+    .handleRequest(textDocument.hover) { in =>
+      get(in.params.textDocument.uri).map { idx =>
+        val lineSpan = idx.text.lines(in.params.position.line.value)
+
+        val cursorPosition =
+          lineSpan.from.offset + in.params.position.character.value
+
+        val resolved = idx.detectReferences.resolve(
+          in.params.position.toCaret(cursorPosition)
+        )
+
+        val definedAt = resolved.flatMap(idx.definitions.get)
+
+        definedAt match
+          case head :: tail =>
+            if tail.nonEmpty then
+              scribe.warn(s"Unexpectedly, got several definitions: $tail")
+
+            Opt(
+              Hover(
+                contents =
+                  MarkedString(MarkedString.S0(language = "llvm", idx.text.sliceOut(head))),
+                range = Opt(head.toRange)
+              )
+            )
+          case Nil =>
+            Opt.empty
+
       }
     }
     .handleRequest(textDocument.documentSymbol) { in =>
@@ -75,15 +179,37 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
         .readUtf8(Path(documentUri.value.drop("file:".length)))
         .compile
         .string
-        .map(parsers.parse)
-        .flatMap {
-          case Left(err) =>
-            in.toClient.sendMessage(s"Failed to parse $err", MessageType.Error)
-          case Right(st) =>
-            state.update(_.updated(documentUri, index(st))) *>
-              in.toClient.sendMessage(s"Successfully parsed")
+        .flatMap { str =>
+          parsers.parse(str) match
+            case Left(err) =>
+              in.toClient.sendMessage(
+                s"Failed to parse $err",
+                MessageType.Error
+              )
+            case Right(st) =>
+              state.update(_.updated(documentUri, index(str, st))) *>
+                in.toClient.sendMessage(s"Successfully parsed")
         }
     }
+    .handleNotification(textDocument.didSave) { in =>
+      val documentUri = in.params.textDocument.uri
+      Files[IO]
+        .readUtf8(Path(documentUri.value.drop("file:".length)))
+        .compile
+        .string
+        .flatMap { str =>
+          parsers.parse(str) match
+            case Left(err) =>
+              in.toClient.sendMessage(
+                s"Failed to parse $err",
+                MessageType.Error
+              )
+            case Right(st) =>
+              state.update(_.updated(documentUri, index(str, st))) *>
+                in.toClient.sendMessage(s"Successfully parsed")
+        }
+    }
+
 
 extension (back: Communicate[IO])
   def sendMessage(
