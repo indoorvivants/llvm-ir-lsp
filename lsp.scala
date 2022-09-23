@@ -142,40 +142,10 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
       }
     }
     .handleNotification(textDocument.didOpen) { in =>
-      val documentUri = in.params.textDocument.uri
-      Files[IO]
-        .readUtf8(Path(documentUri.value.drop("file:".length)))
-        .compile
-        .string
-        .flatMap { str =>
-          parsers.parse(str) match
-            case Left(err) =>
-              in.toClient.sendMessage(
-                s"Failed to parse $err",
-                MessageType.Error
-              )
-            case Right(st) =>
-              state.update(_.updated(documentUri, index(str, st))) *>
-                in.toClient.sendMessage(s"Successfully parsed")
-        }
+      utils.recompile(in.params.textDocument.uri, in.toClient)
     }
     .handleNotification(textDocument.didSave) { in =>
-      val documentUri = in.params.textDocument.uri
-      Files[IO]
-        .readUtf8(Path(documentUri.value.drop("file:".length)))
-        .compile
-        .string
-        .flatMap { str =>
-          parsers.parse(str) match
-            case Left(err) =>
-              in.toClient.sendMessage(
-                s"Failed to parse $err",
-                MessageType.Error
-              )
-            case Right(st) =>
-              state.update(_.updated(documentUri, index(str, st))) *>
-                in.toClient.sendMessage(s"Successfully parsed")
-        }
+      utils.recompile(in.params.textDocument.uri, in.toClient)
     }
 
 class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
@@ -191,15 +161,29 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
     )
   def definitionSpan(idx: Index, position: Position) =
     val lineSpan = idx.text.lines(position.line.value)
-
     val cursorPosition =
       lineSpan.from.offset + position.character.value
-
     val resolved = idx.detectReferences.resolve(
       position.toCaret(cursorPosition)
     )
-
     IO.pure(resolved.flatMap(idx.definitions.get))
+
+  def recompile(documentUri: DocumentUri, back: Communicate[IO]) =
+    Files[IO]
+      .readUtf8(Path(documentUri.value.drop("file:".length)))
+      .compile
+      .string
+      .flatMap { str =>
+        parsers.parse(str) match
+          case Left(err) =>
+            back.sendMessage(
+              s"Failed to parse $err",
+              MessageType.Error
+            )
+          case Right(st) =>
+            state.update(_.updated(documentUri, index(str, st))) *>
+              back.sendMessage(s"Successfully parsed")
+      }
 
 extension (back: Communicate[IO])
   def sendMessage(
