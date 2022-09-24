@@ -24,8 +24,8 @@ Current feature set is very limited, but stay tuned - like and subscribe, smash 
 **Metadata section**
 
 - [x] document symbols
-- [ ] go to definition
-- [ ] hover
+- [x] go to definition
+- [x] hover
 
 ## Setup 
 
