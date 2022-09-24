@@ -123,11 +123,11 @@ object parsers:
       c.isLetterOrDigit || c == '_'
     )).map(_.toString + _)
 
-  case class ParsingError(caret: Caret, text: String) {
-    override def toString() =
-      val line = text.linesIterator.drop(caret.line)
-      val nxt = (" " * caret.col) + Console.RED + "^" + Console.RESET
-      line.next() + "\n" + nxt
+  class ParsingError(caret: Caret, text: String) extends Exception(s"Parsing failed at line ${caret.line} column ${caret.col}") {
+      def render = 
+        val line = text.linesIterator.drop(caret.line)
+        val nxt = (" " * caret.col) + Console.RED + "^" + Console.RESET
+        line.next() + "\n" + nxt
   }
 
   def parse(s: String): Either[ParsingError, Program] =
