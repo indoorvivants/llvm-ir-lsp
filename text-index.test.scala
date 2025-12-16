@@ -37,3 +37,4 @@ object TextIndexSpec extends weaver.FunSuite:
         )
       }
   }
+end TextIndexSpec

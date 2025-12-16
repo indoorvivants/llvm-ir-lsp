@@ -1,5 +1,3 @@
-//> using lib "com.lihaoyi::pprint:0.7.3"
-
 import cats.parse.Caret
 
 trait IntervalTree[T]:
@@ -12,11 +10,11 @@ object IntervalTree:
       if sortedSpans.size == 1 then Tree.Leaf(sortedSpans.head)
       else if sortedSpans.size == 0 then Tree.Empty
       else
-        val start = sortedSpans.head.from.offset
-        val end = sortedSpans.last.to.offset
+        val start       = sortedSpans.head.from.offset
+        val end         = sortedSpans.last.to.offset
         val centerPoint = (start + end) / 2
-        val toTheLeft = sortedSpans.takeWhile(_.to.offset < centerPoint)
-        val toTheRight = sortedSpans.dropWhile(_.from.offset < centerPoint)
+        val toTheLeft   = sortedSpans.takeWhile(_.to.offset < centerPoint)
+        val toTheRight  = sortedSpans.dropWhile(_.from.offset < centerPoint)
         val overlapping = sortedSpans.filter(s =>
           s.from.offset <= centerPoint && s.to.offset >= centerPoint
         )
@@ -33,6 +31,7 @@ object IntervalTree:
     val data = split(sorted)
 
     Impl(data, mp)
+  end construct
 
   private class Impl[T](tree: Tree, mp: Map[Span, T]) extends IntervalTree[T]:
     override def resolve(offset: Int): List[T] =
@@ -53,8 +52,13 @@ object IntervalTree:
           case Empty => Nil
 
       go(tree).flatMap(mp.get)
+    end resolve
+
+    override def toString(): String = tree.toString()
+  end Impl
 
   private enum Tree:
     case Split(point: Int, left: Tree, right: Tree, in: List[Span])
     case Leaf(span: Span)
     case Empty
+end IntervalTree

@@ -1,7 +1,5 @@
-//> using lib "com.disneystreaming::weaver-cats::0.8.0"
-
 import weaver.*
-import SpannedTree._
+import SpannedTree.*
 
 import parsers.parse
 
@@ -38,3 +36,4 @@ object ParsingSpec extends FunSuite:
 
     // expect.all(parse("declare i32 @llvm.eh.typeid.for(i8*)") == emptyProg)
   }
+end ParsingSpec

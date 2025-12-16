@@ -1,6 +1,6 @@
 opaque type Id = Int
 object Id:
-  inline def apply(i: Int): Id = i
+  inline def apply(i: Int): Id             = i
   extension (id: Id) inline def value: Int = id
 
 opaque type FieldName = String
@@ -11,7 +11,7 @@ opaque type Struct = String
 object Struct:
   inline def apply(i: String): Struct = i
 
-trait Module[F[_]]:
+trait Metadata[F[_]]:
   sealed trait Expression[X[_]]
 
   enum Atom extends Expression[F]:
@@ -37,3 +37,4 @@ trait Module[F[_]]:
     case Assignment(id: F[Atom.Ref], value: F[Expression[F]])
 
   case class Program(asses: Vector[F[Statement]])
+end Metadata

@@ -10,7 +10,7 @@ clean:
 
 bin/LLVM_LanguageServer:
 	mkdir -p bin
-	scala-cli package *.scala -M LLVM_Lsp --native-mode $(RELEASE_MODE) --native  -f -o bin/LLVM_LanguageServer$(BUILD_SUFFIX)
+	scala-cli package *.scala -M LLVM_Lsp --native-image -f -o bin/LLVM_LanguageServer$(BUILD_SUFFIX)
 
 test:
 	scala-cli test *.scala

@@ -1,13 +1,14 @@
-import SpannedTree._
+import SpannedTree.*
 import cats.effect.*
 import cats.effect.std.*
 import fs2.io.file.*
-import jsonrpclib.fs2._
+import jsonrpclib.fs2.*
 import langoustine.lsp.*
 import langoustine.lsp.all.*
 import langoustine.lsp.app.*
 
-class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
+class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
+  import Utils.*
   def get(u: DocumentUri) =
     state.get.flatMap(
       _.get(u)
@@ -18,15 +19,6 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
           )
         )
     )
-  def definitionSpan(idx: Index, position: Position) =
-    val lineSpan = idx.text.lines(position.line.value)
-    val cursorPosition =
-      lineSpan.from.offset + position.character.value
-    val resolved = idx.detectReferences.resolve(
-      position.toCaret(cursorPosition)
-    )
-    IO.pure(resolved.flatMap(idx.definitions.get))
-
   def recompile(documentUri: DocumentUri, back: Communicate[IO]) =
     Files[IO]
       .readUtf8(Path(documentUri.value.drop("file:".length)))
@@ -43,6 +35,20 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]):
             state.update(_.updated(documentUri, Index.create(str, st))) *>
               back.sendMessage(s"Successfully parsed")
       }
+end Utils
+
+private trait UtilsCommon:
+  def definitionSpan(idx: Index, position: Position) =
+    val lineSpan = idx.text.lines(position.line.value)
+    val cursorPosition =
+      lineSpan.from.offset + position.character.value
+    val resolved = idx.detectReferences.resolve(
+      position.toCaret(cursorPosition)
+    )
+    IO.pure(resolved.flatMap(idx.definitions.get))
+end UtilsCommon
+
+object Utils extends UtilsCommon
 
 extension (s: cats.parse.Caret)
   def toPosition: Position =
@@ -70,3 +76,4 @@ extension (back: Communicate[IO])
       textDocument.publishDiagnostics,
       PublishDiagnosticsParams(uri, diagnostics = vec)
     )
+end extension

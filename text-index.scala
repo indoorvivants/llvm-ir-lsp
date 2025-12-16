@@ -2,7 +2,8 @@ import cats.parse.*
 import scala.collection.SortedMap
 
 case class TextIndex(lines: SortedMap[Int, Span], text: String):
-  val offsetLookup: IntervalTree[Int] = IntervalTree.construct(lines.toMap.map(_.swap))
+  val offsetLookup: IntervalTree[Int] =
+    IntervalTree.construct(lines.toMap.map(_.swap))
   def sliceOut(span: Span) =
     text.slice(span.from.offset, span.to.offset)
 
@@ -13,8 +14,8 @@ object TextIndex:
         case ((offset, spans), (line, idx)) =>
           val length = line.length - line.count(c => c == '\r' || c == '\n')
 
-          val start = Caret(idx , 0, offset)
-          val end = Caret(idx , length, offset + length)
+          val start = Caret(idx, 0, offset)
+          val end   = Caret(idx, length, offset + length)
 
           ((offset + line.length), Span(start, end) :: spans)
       }
@@ -25,3 +26,5 @@ object TextIndex:
       ),
       text
     )
+  end construct
+end TextIndex

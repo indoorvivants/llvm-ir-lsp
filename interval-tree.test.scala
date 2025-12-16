@@ -5,8 +5,8 @@ object IntervalTreeSpec extends weaver.FunSuite:
     def c(off: Int) = Caret(0, 0, off)
 
     val spans = Map(
-      Span(c(0), c(4)) -> "hello",
-      Span(c(5), c(7)) -> "yo",
+      Span(c(0), c(4))   -> "hello",
+      Span(c(5), c(7))   -> "yo",
       Span(c(11), c(14)) -> "yoasd"
     )
 
@@ -25,12 +25,14 @@ object IntervalTreeSpec extends weaver.FunSuite:
     def c(off: Int) = Caret(0, 0, off)
 
     val spans = Map(
-      Span(c(0), c(4)) -> "hello",
-      Span(c(2), c(7)) -> "yo",
+      Span(c(0), c(4))  -> "hello",
+      Span(c(2), c(7))  -> "yo",
       Span(c(6), c(14)) -> "yoasd"
     )
 
     val itree = IntervalTree.construct(spans)
+
+    pprint.pprintln(itree)
 
     expect.all(
       itree.resolve(c(3)).toSet == Set("hello", "yo"),
@@ -39,3 +41,4 @@ object IntervalTreeSpec extends weaver.FunSuite:
       itree.resolve(c(15)) == Nil
     )
   }
+end IntervalTreeSpec
