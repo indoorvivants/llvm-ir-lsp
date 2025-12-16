@@ -50,7 +50,7 @@ end UtilsCommon
 
 object Utils extends UtilsCommon
 
-extension (s: cats.parse.Caret)
+extension (s: Caret)
   def toPosition: Position =
     Position(line = s.line, character = s.col)
 
@@ -59,7 +59,7 @@ extension (s: Span)
 
 extension (s: Position)
   def toCaret(offset: Int) =
-    cats.parse.Caret(s.line.value, s.character.value, offset)
+    Caret(s.line.value, s.character.value, offset)
 
 extension (back: Communicate[IO])
   def sendMessage(

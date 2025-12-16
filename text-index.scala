@@ -1,4 +1,3 @@
-import cats.parse.*
 import scala.collection.SortedMap
 
 case class TextIndex(lines: SortedMap[Int, Span], text: String):

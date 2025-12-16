@@ -1,9 +1,14 @@
-import cats.parse.Parser as P
-import cats.parse.Parser0 as P0
-import cats.parse.Caret
-import cats.parse.Rfc5234.{sp, alpha, digit, crlf, lf}
+import parsley.Parsley
+import parsley.Parsley.{atomic, pure, empty}
+import parsley.character.{char, string, satisfy}
+import parsley.combinator.{many, some, sepBy, sepBy1, option, choice, eof}
+import parsley.position.{pos, offset, line, col}
+import parsley.syntax.character.{charLift, stringLift}
+import parsley.lift.{lift2, lift3}
 
 object SpannedTree extends Metadata[WithSpan]
+
+case class Caret(line: Int, col: Int, offset: Int)
 
 case class Span(from: Caret, to: Caret):
   def contains(c: Caret) =
@@ -16,108 +21,123 @@ case class Span(from: Caret, to: Caret):
 case class WithSpan[A](span: Span, value: A):
   def map[B](f: A => B): WithSpan[B] = copy(value = f(value))
 
-private def withSpan[A](p: P[A]): P[WithSpan[A]] =
-  (P.caret.with1 ~ p ~ P.caret).map { case ((start, a), end) =>
-    WithSpan(Span(start, end), a)
-  }
+private val caret: Parsley[Caret] =
+  lift3[Int, Int, Int, Caret]((l, c, o) => Caret(l - 1, c - 1, o), line, col, offset)
 
-extension [A](p: P[A])
-  def span: P[WithSpan[A]] =
-    (P.caret.with1 ~ p ~ P.caret).map { case ((start, a), end) =>
-      WithSpan(Span(start, end), a)
-    }
+private def withSpan[A](p: Parsley[A]): Parsley[WithSpan[A]] =
+  lift3[Caret, A, Caret, WithSpan[A]]((start, a, end) => WithSpan(Span(start, end), a), caret, p, caret)
+
+extension [A](p: Parsley[A])
+  def spanned: Parsley[WithSpan[A]] =
+    lift3[Caret, A, Caret, WithSpan[A]]((start, a, end) => WithSpan(Span(start, end), a), caret, p, caret)
 
 import SpannedTree.*
 
 object parsers:
+  private val sp = char(' ')
+  private val lfChar = char('\n')
+  private val crlfStr = string("\r\n")
+
   // atoms and atom-like things
-  val fieldName = alphanumeric.map(FieldName.apply(_))
+  lazy val fieldName: Parsley[FieldName] = alphanumeric.map(FieldName.apply(_))
 
-  val structName = alphanumeric.map(Struct.apply(_))
+  lazy val structName: Parsley[Struct] = alphanumeric.map(Struct.apply(_))
 
-  val const = alphanumeric.map(Atom.Const(_))
-  val id    = integer.map(Id.apply(_))
-  val ref   = (EXCL *> id).map(Atom.Ref.apply(_): Atom.Ref)
-  val num = (((P.charIn('i', 'u') ~ integer)
-    .map((c, i) => s"$c$i") <* sp.rep.void) ~ integer).map((sz, i) =>
-    Atom.Num(i, sz)
-  ) orElse integer.map(Atom.Num.apply(_, "i32"))
-  val string =
-    (EXCL *> P
-      .charsWhile(_ != '"')
-      .surroundedBy(P.char('"'))
-      .map(Atom.Str.apply)).backtrack orElse
-      P.charsWhile(_ != '"').surroundedBy(P.char('"')).map(Atom.Str.apply)
+  lazy val const: Parsley[Atom.Const] = alphanumeric.map(Atom.Const(_))
+  lazy val id: Parsley[Id] = integer.map(Id.apply(_))
+  lazy val ref: Parsley[Atom.Ref] = (EXCL *> id).map(Atom.Ref.apply(_): Atom.Ref)
+
+  lazy val num: Parsley[Atom.Num] =
+    val withType = lift2[Char, Int, String]((c, i) => s"$c$i", satisfy(c => c == 'i' || c == 'u'), integer)
+    val typed = lift2[String, Int, Atom.Num]((sz, i) => Atom.Num(i, sz), withType <* many(sp).void, integer)
+    val untyped: Parsley[Atom.Num] = integer.map(Atom.Num.apply(_, "i32"))
+    typed <|> untyped
+
+  lazy val stringExpr: Parsley[Atom.Str] =
+    val quotedStr: Parsley[Atom.Str] = (char('"') *> many(satisfy(_ != '"')) <* char('"')).map(cs => Atom.Str(cs.mkString))
+    val withExcl: Parsley[Atom.Str] = atomic(EXCL *> quotedStr)
+    withExcl <|> quotedStr
 
   // composite expressions
 
   // expression
-  val expr = P.recursive[Expression[WithSpan]] { recurse =>
-    val e = recurse.surroundedBy(sp.rep0)
+  lazy val expr: Parsley[Expression[WithSpan]] = {
+    lazy val e: Parsley[Expression[WithSpan]] = many(sp) *> expr <* many(sp)
+    lazy val eSpanned: Parsley[WithSpan[Expression[WithSpan]]] = withSpan(e)
 
-    val bag = EXCL *>
-      e.span
-        .repSep0(COMMA)
-        .between(LB, RB)
+    lazy val bag: Parsley[Bag] = EXCL *>
+      (LB *> sepBy(eSpanned, COMMA) <* RB)
         .map(_.toVector)
         .map(Bag.apply)
 
-    val fieldValue =
-      ((fieldName <* COLON) ~ e.span).map((k, v) => Field.KeyValue(k, v))
+    lazy val fieldValue: Parsley[Field.KeyValue] =
+      lift2[FieldName, WithSpan[Expression[WithSpan]], Field.KeyValue](
+        (k, v) => Field.KeyValue(k, v),
+        fieldName <* COLON,
+        eSpanned
+      )
 
-    inline def named = ((EXCL *> structName) ~ fieldValue
-      .surroundedBy(sp.rep0)
-      .repSep0(COMMA)
-      .map(_.toVector)
-      .between(LP, RP)).map((s, f) => NamedData(s, f))
+    lazy val named: Parsley[NamedData] = lift2[Struct, Vector[Field.KeyValue], NamedData](
+      (s, f) => NamedData(s, f),
+      EXCL *> structName,
+      LP *> sepBy(many(sp) *> fieldValue <* many(sp), COMMA).map(_.toVector) <* RP
+    )
 
-    inline def distinctNamed =
-      (P.string("distinct") *> sp.rep.void *> named).span.map(Distinct.apply)
+    lazy val distinctNamed: Parsley[Distinct] =
+      withSpan(string("distinct") *> some(sp).void *> named).map(Distinct.apply)
 
-    P.oneOf(
-      distinctNamed :: ref.backtrack :: bag.backtrack ::
-        named :: num :: const :: string :: Nil
+    choice(
+      distinctNamed,
+      atomic(ref),
+      atomic(bag),
+      atomic(named),
+      num,
+      const,
+      stringExpr
     )
   }
 
   // assignment
-  val debugAssignment =
-    ((withSpan(ref) <* sp.? <* ASS) ~ withSpan(expr).surroundedBy(sp.rep0))
-      .map((rf, expr) => Statement.Assignment.apply(rf, expr))
-      .surroundedBy(sp.rep0)
+  lazy val debugAssignment: Parsley[Statement.Assignment] =
+    lift2[WithSpan[Atom.Ref], WithSpan[Expression[WithSpan]], Statement.Assignment](
+      (rf, expr) => Statement.Assignment(rf, expr),
+      many(sp) *> withSpan(ref) <* option(sp) <* ASS,
+      many(sp) *> withSpan(expr) <* many(sp)
+    )
 
   // whole section
-  val sep = crlf orElse lf
+  lazy val sep: Parsley[Unit] = (crlfStr <|> lfChar).void
 
-  val statement =
-    withSpan(debugAssignment).map(Right(_)).backtrack orElse
-      P.charsWhile(_ != '\n').map(Left(_))
+  lazy val statement: Parsley[Either[String, WithSpan[Statement]]] =
+    atomic(withSpan(debugAssignment).map(ws => ws.map(s => s: Statement)).map(Right(_))) <|>
+      many(satisfy(_ != '\n')).map(cs => Left(cs.mkString))
 
-  val statements = statement
-    .repSep0(sep.rep)
-    .surroundedBy(sep.rep0)
+  lazy val statements: Parsley[List[Either[String, WithSpan[Statement]]]] =
+    many(sep) *> sepBy(statement, some(sep)) <* many(sep)
 
-  val program = statements
+  lazy val program: Parsley[Program] = statements
     .map(_.toVector)
     .map(_.collect { case Right(v) => v })
     .map(Program.apply)
 
-  inline def LP        = P.char('(')
-  inline def RP        = P.char(')')
-  inline def LB        = P.char('{')
-  inline def RB        = P.char('}')
-  inline def ASS       = P.char('=')
-  inline def SEMICOLON = P.char(';')
-  inline def COLON     = P.char(':')
-  inline def EXCL      = P.char('!')
-  inline def COMMA     = P.char(',')
+  val LP: Parsley[Char]        = char('(')
+  val RP: Parsley[Char]        = char(')')
+  val LB: Parsley[Char]        = char('{')
+  val RB: Parsley[Char]        = char('}')
+  val ASS: Parsley[Char]       = char('=')
+  val SEMICOLON: Parsley[Char] = char(';')
+  val COLON: Parsley[Char]     = char(':')
+  val EXCL: Parsley[Char]      = char('!')
+  val COMMA: Parsley[Char]     = char(',')
 
-  inline def integer = P.charsWhile(_.isDigit).map(_.toInt)
+  lazy val integer: Parsley[Int] = some(satisfy(_.isDigit)).map(_.mkString.toInt)
 
-  inline def alphanumeric =
-    (P.charWhere(_.isLetter) ~ P.charsWhile0(c =>
-      c.isLetterOrDigit || c == '_'
-    )).map(_.toString + _)
+  lazy val alphanumeric: Parsley[String] =
+    lift2[Char, List[Char], String](
+      (first, rest) => first.toString + rest.mkString,
+      satisfy(_.isLetter),
+      many(satisfy(c => c.isLetterOrDigit || c == '_'))
+    )
 
   class ParsingError(caret: Caret, text: String)
       extends Exception(
@@ -135,21 +155,21 @@ object parsers:
     parseWithPosition(expr, s)
 
   private def parseWithPosition[A](
-      p: P0[A] | P[A],
+      p: Parsley[A],
       s: String
   ): Either[ParsingError, A] =
-    p.parseAll(s).left.map { err =>
-      val offset = err.failedAtOffset
-      var line   = 0
-      var col    = 0
-      (0 to (offset min s.length)).foreach { i =>
-        if (s(i) == '\n') then
-          line += 1
-          col = 0
-        else col += 1
+    p.parse(s) match
+      case parsley.Success(result) => Right(result)
+      case parsley.Failure(err) =>
+        // Extract position from error message - Parsley provides line/col info
+        var lineNum = 0
+        var colNum = 0
+        var offsetNum = 0
+        // Parse error position from Parsley's error message format
+        val linePattern = "line (\\d+)".r
+        val colPattern = "column (\\d+)".r
+        linePattern.findFirstMatchIn(err.toString).foreach(m => lineNum = m.group(1).toInt - 1)
+        colPattern.findFirstMatchIn(err.toString).foreach(m => colNum = m.group(1).toInt - 1)
+        Left(ParsingError(Caret(lineNum, colNum, offsetNum), s))
 
-      }
-
-      ParsingError(Caret(line, col, offset), s)
-    }
 end parsers

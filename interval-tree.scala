@@ -1,5 +1,3 @@
-import cats.parse.Caret
-
 trait IntervalTree[T]:
   def resolve(position: Caret): List[T] = resolve(position.offset)
   def resolve(offset: Int): List[T]

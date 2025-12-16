@@ -3,7 +3,7 @@
 
 //> using dependency "com.indoorvivants.detective::platform::0.1.0"
 //> using dependency "com.lihaoyi::pprint:0.9.6"
-//> using dependency "org.typelevel::cats-parse::1.1.0"
+//> using dependency "com.github.j-mie6::parsley::4.6.1"
 //> using dependency "tech.neander::langoustine-app::0.0.25"
 
 // Test
