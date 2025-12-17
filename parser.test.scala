@@ -1,298 +1,315 @@
 import weaver.*
-import SpannedTree.*
 
-import parsers.{parse, parseExpr}
+import PureTree.*
+import PureParsers.*
+import cats.Show
 
 object ParsingSpec extends FunSuite:
 
   test("parse const expression") {
-    val result = parseExpr("DWARF")
-    result match
-      case Right(Atom.Const(value)) => expect(value == "DWARF")
-      case other => failure(s"Expected Atom.Const, got $other")
+    expect.same(parseExpr("DWARF"), Right(Atom.Const("DWARF")))
   }
 
   test("parse string expression") {
-    val result = parseExpr("\"DWARF\"")
-    result match
-      case Right(Atom.Str(value)) => expect(value == "DWARF")
-      case other => failure(s"Expected Atom.Str, got $other")
+    expect.same(
+      parseExpr("\"DWARF\""),
+      Right(Atom.Str("DWARF"))
+    )
   }
 
   test("parse string expression with exclamation") {
-    val result = parseExpr("!\"hello world\"")
-    result match
-      case Right(Atom.Str(value)) => expect(value == "hello world")
-      case other => failure(s"Expected Atom.Str, got $other")
+    expect.same(
+      parseExpr("!\"hello world\""),
+      Right(Atom.Str("hello world"))
+    )
   }
 
   test("parse integer without type") {
-    val result = parseExpr("25")
-    result match
-      case Right(num: Atom.Num) =>
-        expect.all(
-          num.value == 25,
-          num.tpe == "i32"
-        )
-      case other => failure(s"Expected Atom.Num, got $other")
+    expect.same(
+      parseExpr("25"),
+      Right(Atom.Num(25, "i32"))
+    )
   }
 
   test("parse integer with i8 type") {
-    val result = parseExpr("i8 5")
-    result match
-      case Right(num: Atom.Num) =>
-        expect.all(
-          num.value == 5,
-          num.tpe == "i8"
-        )
-      case other => failure(s"Expected Atom.Num, got $other")
+    expect.same(
+      parseExpr("i8 5"),
+      Right(Atom.Num(5, "i8"))
+    )
   }
 
   test("parse integer with i32 type") {
-    val result = parseExpr("i32 42")
-    result match
-      case Right(num: Atom.Num) =>
-        expect.all(
-          num.value == 42,
-          num.tpe == "i32"
-        )
-      case other => failure(s"Expected Atom.Num, got $other")
+    expect.same(
+      parseExpr("i32 42"),
+      Right(Atom.Num(42, "i32"))
+    )
   }
 
   test("parse integer with u64 type") {
-    val result = parseExpr("u64 123")
-    result match
-      case Right(num: Atom.Num) =>
-        expect.all(
-          num.value == 123,
-          num.tpe == "u64"
-        )
-      case other => failure(s"Expected Atom.Num, got $other")
+    expect.same(
+      parseExpr("u64 123"),
+      Right(Atom.Num(123, "u64"))
+    )
   }
 
   test("parse reference") {
-    val result = parseExpr("!25")
-    result match
-      case Right(ref: Atom.Ref) =>
-        expect(ref.id.value == 25)
-      case other => failure(s"Expected Atom.Ref, got $other")
+    expect.same(
+      parseExpr("!25"),
+      Right(Atom.Ref(Id(25)))
+    )
   }
 
   test("parse bag expression") {
-    val result = parseExpr("!{ i32 5, \"Dwarf Version\", 3}")
-    result match
-      case Right(Bag(exprs)) =>
-        expect(exprs.map(_.value) == Vector(
-          Atom.Num(5, "i32"),
-          Atom.Str("Dwarf Version"),
-          Atom.Num(3, "i32")
-        ))
-      case other => failure(s"Expected Bag, got $other")
+    expect.same(
+      parseExpr("!{ i32 5, \"Dwarf Version\", 3}"),
+      Right(
+        Bag(
+          Vector(
+            Atom.Num(5, "i32"),
+            Atom.Str("Dwarf Version"),
+            Atom.Num(3, "i32")
+          )
+        )
+      )
+    )
   }
 
   test("parse empty bag") {
-    val result = parseExpr("!{}")
-    result match
-      case Right(bag: Bag) =>
-        expect(bag.exprs.isEmpty)
-      case other => failure(s"Expected Bag, got $other")
+    expect.same(
+      parseExpr("!{}"),
+      Right(Bag(Vector.empty))
+    )
   }
 
   test("parse bag with references") {
-    val result = parseExpr("!{!1, !2, !3}")
-    result match
-      case Right(Bag(exprs)) =>
-        expect(exprs.map(_.value) == Vector(
-          Atom.Ref(Id(1)),
-          Atom.Ref(Id(2)),
-          Atom.Ref(Id(3))
-        ))
-      case other => failure(s"Expected Bag, got $other")
+    expect.same(
+      parseExpr("!{!1, !2, !3}"),
+      Right(
+        Bag(
+          Vector(
+            Atom.Ref(Id(1)),
+            Atom.Ref(Id(2)),
+            Atom.Ref(Id(3))
+          )
+        )
+      )
+    )
   }
 
   test("parse named data expression") {
-    val result = parseExpr("!DiLocalVariable(a: !{25})")
-    result match
-      case Right(NamedData(struct, Vector(Field.KeyValue(name, valueSpan)))) =>
-        expect.all(
-          struct == Struct("DiLocalVariable"),
-          name == FieldName("a")
+    expect.same(
+      parseExpr("!DiLocalVariable(a: !{25})"),
+      Right(
+        NamedData(
+          Struct("DiLocalVariable"),
+          Vector(
+            Field.KeyValue(FieldName("a"), Bag(Vector(Atom.Num(25, "i32"))))
+          )
         )
-        valueSpan.value match
-          case Bag(exprs) =>
-            expect(exprs.map(_.value) == Vector(Atom.Num(25, "i32")))
-          case other => failure(s"Expected Bag in field, got $other")
-      case other => failure(s"Expected NamedData with one field, got $other")
+      )
+    )
   }
 
   test("parse named data with multiple fields") {
-    val result = parseExpr("!DIFile(filename: \"test.scala\", directory: \"/home\")")
-    result match
-      case Right(NamedData(struct, Vector(
-        Field.KeyValue(name1, value1Span),
-        Field.KeyValue(name2, value2Span)
-      ))) =>
-        expect.all(
-          struct == Struct("DIFile"),
-          name1 == FieldName("filename"),
-          name2 == FieldName("directory"),
-          value1Span.value == Atom.Str("test.scala"),
-          value2Span.value == Atom.Str("/home")
+    expect.same(
+      parseExpr(
+        "!DIFile(filename: \"test.scala\", directory: \"/home\")"
+      ),
+      Right(
+        NamedData(
+          Struct("DIFile"),
+          Vector(
+            Field.KeyValue(FieldName("filename"), Atom.Str("test.scala")),
+            Field.KeyValue(FieldName("directory"), Atom.Str("/home"))
+          )
         )
-      case other => failure(s"Expected NamedData with two fields, got $other")
+      )
+    )
   }
 
   test("parse named data with empty fields") {
-    val result = parseExpr("!DILocation()")
-    result match
-      case Right(named: NamedData) =>
-        expect.all(
-          named.struct == Struct("DILocation"),
-          named.fields.isEmpty
-        )
-      case other => failure(s"Expected NamedData, got $other")
+    expect.same(
+      parseExpr("!DILocation()"),
+      Right(
+        NamedData(Struct("DILocation"), Vector.empty)
+      )
+    )
   }
 
   test("parse distinct expression") {
-    val result = parseExpr("distinct !DiLocalVariable(a: 5)")
-    result match
-      case Right(Distinct(exprSpan)) =>
-        exprSpan.value match
-          case NamedData(struct, fields) =>
-            expect.all(
-              struct == Struct("DiLocalVariable"),
-              fields.size == 1
-            )
-          case other => failure(s"Expected NamedData inside Distinct, got $other")
-      case other => failure(s"Expected Distinct, got $other")
+    expect.same(
+      parseExpr("distinct !DiLocalVariable(a: 5)"),
+      Right(
+        Distinct(
+          NamedData(
+            Struct("DiLocalVariable"),
+            Vector(Field.KeyValue(FieldName("a"), Atom.Num(5, "i32")))
+          )
+        )
+      )
+    )
   }
 
-  test("parse full assignment with const") {
+  test("parse full MetadataAssignment with const") {
     val result = parse("!25 = DWARF")
-    result match
-      case Right(Program(Vector(stmtSpan))) =>
-        stmtSpan.value match
-          case Statement.Assignment(idSpan, exprSpan) =>
-            expect.all(
-              idSpan.value == Atom.Ref(Id(25)),
-              exprSpan.value == Atom.Const("DWARF")
-            )
-      case Left(err) => failure(s"Parse failed: $err")
-      case other => failure(s"Expected single assignment, got $other")
+
+    expect.same(
+      result,
+      Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(Atom.Ref(Id(25)), Atom.Const("DWARF"))
+          )
+        )
+      )
+    )
+
   }
 
-  test("parse full assignment with string") {
-    val result = parse("!25 = \"DWARF\"")
-    result match
-      case Right(Program(Vector(stmtSpan))) =>
-        stmtSpan.value match
-          case Statement.Assignment(idSpan, exprSpan) =>
-            expect.all(
-              idSpan.value == Atom.Ref(Id(25)),
-              exprSpan.value == Atom.Str("DWARF")
-            )
-      case Left(err) => failure(s"Parse failed: $err")
-      case other => failure(s"Expected single assignment, got $other")
+  test("parse full MetadataAssignment with string") {
+    expect.same(
+      parse("!25 = \"DWARF\""),
+      Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(Atom.Ref(Id(25)), Atom.Str("DWARF"))
+          )
+        )
+      )
+    )
   }
 
-  test("parse full assignment with reference") {
-    val result = parse("!25 = !25")
-    result match
-      case Right(Program(Vector(stmtSpan))) =>
-        stmtSpan.value match
-          case Statement.Assignment(idSpan, exprSpan) =>
-            expect.all(
-              idSpan.value == Atom.Ref(Id(25)),
-              exprSpan.value == Atom.Ref(Id(25))
+  test("parse full MetadataAssignment with reference") {
+    expect.same(
+      parse("!25 = !{!24, !24}"),
+      Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(
+              Atom.Ref(Id(25)),
+              Bag(Vector(Atom.Ref(Id(24)), Atom.Ref(Id(24))))
             )
-      case Left(err) => failure(s"Parse failed: $err")
-      case other => failure(s"Expected single assignment, got $other")
+          )
+        )
+      )
+    )
   }
 
-  test("parse full assignment with typed integer") {
-    val result = parse("!25 = i8 5")
-    result match
-      case Right(Program(Vector(stmtSpan))) =>
-        stmtSpan.value match
-          case Statement.Assignment(idSpan, exprSpan) =>
-            expect.all(
-              idSpan.value == Atom.Ref(Id(25)),
-              exprSpan.value == Atom.Num(5, "i8")
-            )
-      case Left(err) => failure(s"Parse failed: $err")
-      case other => failure(s"Expected single assignment, got $other")
+  test("parse full MetadataAssignment with typed integer") {
+    expect.same(
+      parse("!25 = i8 5"),
+      Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(Atom.Ref(Id(25)), Atom.Num(5, "i8"))
+          )
+        )
+      )
+    )
   }
 
-  test("parse full assignment with bag") {
-    val result = parse("!25 = !{ i32 5, \"Dwarf Version\", 3}")
-    result match
-      case Right(Program(Vector(stmtSpan))) =>
-        stmtSpan.value match
-          case Statement.Assignment(idSpan, exprSpan) =>
-            expect(idSpan.value == Atom.Ref(Id(25)))
-            exprSpan.value match
-              case Bag(exprs) =>
-                expect(exprs.map(_.value) == Vector(
+  test("parse full MetadataAssignment with bag") {
+    expect(
+      parse("!25 = !{ i32 5, \"Dwarf Version\", 3}") == Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(
+              Atom.Ref(Id(25)),
+              Bag(
+                Vector(
                   Atom.Num(5, "i32"),
                   Atom.Str("Dwarf Version"),
                   Atom.Num(3, "i32")
-                ))
-              case other => failure(s"Expected Bag, got $other")
-      case Left(err) => failure(s"Parse failed: $err")
-      case other => failure(s"Expected single assignment, got $other")
-  }
-
-  test("parse multiple assignments") {
-    val input = """!0 = DWARF
-                  |!1 = i32 42
-                  |!2 = !0""".stripMargin
-    val result = parse(input)
-    result match
-      case Right(Program(stmts)) =>
-        val assignments = stmts.map(_.value).collect {
-          case Statement.Assignment(idSpan, valueSpan) =>
-            (idSpan.value, valueSpan.value)
-        }
-        expect(assignments == Vector(
-          (Atom.Ref(Id(0)), Atom.Const("DWARF")),
-          (Atom.Ref(Id(1)), Atom.Num(42, "i32")),
-          (Atom.Ref(Id(2)), Atom.Ref(Id(0)))
-        ))
-      case Left(err) => failure(s"Parse failed: $err")
-  }
-
-  test("ignores things that are not good") {
-    val emptyProg = Right(Program(Vector()))
-
-    val examples = List(
-      "define i32 @\"_SM11scala.None$D12productArityiEO\"(i8* %_1) personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*) !dbg !69 {",
-      "_20000.0:",
-      "  ret i32 0",
-      "}",
-      "",
-      "define nonnull dereferenceable(32) i8* @\"_SM11scala.None$D13productPrefixL16java.lang.StringEO\"(i8* %_1) personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*) !dbg !72 {",
-      "_20000.0:",
-      "  ret i8* bitcast ({ i8*, i8*, i32, i32, i32 }* @\"_SM7__constG3-198\" to i8*)",
-      "}"
+                )
+              )
+            )
+          )
+        )
+      )
     )
-
-    forEach(examples)(ex => expect(parse(ex) == emptyProg))
   }
 
-  test("mixed valid and invalid lines") {
-    val input = """define i32 @main() {
-                  |!0 = DWARF
+  test("parse multiple MetadataAssignments") {
+    val input = """
+    |!0 = DWARF
+    |!1 = i32 42
+    |!2 = !0""".stripMargin.trim
+
+    expect(
+      clue(parse(input)) == Right(
+        Program(
+          Vector(
+            Statement.MetadataAssignment(Atom.Ref(Id(0)), Atom.Const("DWARF")),
+            Statement.MetadataAssignment(Atom.Ref(Id(1)), Atom.Num(42, "i32")),
+            Statement.MetadataAssignment(Atom.Ref(Id(2)), Atom.Ref(Id(0)))
+          )
+        )
+      )
+    )
+  }
+
+  test("parses function definition") {
+    val input =
+      """define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
+  %2 = alloca float, align 4
+  store float %0, ptr %2, align 4
+  call void @llvm.dbg.declare(metadata ptr %2, metadata !16, metadata !DIExpression()), !dbg !17
+  %3 = load float, ptr %2, align 4, !dbg !18
+  %4 = fdiv float %3, 2.000000e+00, !dbg !19
+  ret float %4, !dbg !20
+}
+"""
+    given tst: Show[Either[ParsingError, tree.Statement]] =
+      s => pprint.apply(s).render
+
+    expect.same(
+      parse(input, functionDefinition),
+      Right(
+        Statement.FunctionDefinition(
+          (None, Some("dso_local"), None, Some("noundef")),
+          Function(
+            "_Z1tf",
+            Vector(FunctionArgument(ArgumentType("float"), "0")),
+            "float",
+            Vector(Atom.Ref(Id(10)))
+          ),
+          Vector(
+            (2, " float, align 4"),
+            " float %0, ptr %2, align 4",
+            " void @llvm.dbg.declare(metadata ptr %2, metadata !16, metadata !DIExpression()), !dbg !17",
+            (3, " float, ptr %2, align 4, !dbg !18"),
+            (4, " float %3, 2.000000e+00, !dbg !19"),
+            " float %4, !dbg !20"
+          )
+        )
+      )
+    )
+  }
+
+  test("mixed definitions") {
+    val input = """
+                  |; This is a comment
+                  |define i32 @main() {
                   |  ret i32 0
                   |}
                   |!1 = i32 5""".stripMargin
-    val result = parse(input)
-    result match
-      case Right(Program(stmts)) =>
-        val ids = stmts.map(_.value).collect {
-          case Statement.Assignment(idSpan, _) => idSpan.value
-        }
-        expect(ids == Vector(Atom.Ref(Id(0)), Atom.Ref(Id(1))))
-      case Left(err) => failure(s"Parse failed: $err")
+
+    expect.same(
+      parse(input),
+      Right(
+        Program(
+          Vector(
+            Statement.LineComment(" This is a comment"),
+            Statement.FunctionDefinition(
+              attrs = (None, None, None, None),
+              func = Function("main", Vector.empty, "i32", Vector.empty),
+              body = Vector(" i32 0")
+            ),
+            Statement.MetadataAssignment(Atom.Ref(Id(1)), Atom.Num(5, "i32"))
+          )
+        )
+      )
+    )
   }
 
 end ParsingSpec

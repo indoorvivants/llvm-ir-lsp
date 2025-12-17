@@ -1,5 +1,3 @@
-import SpannedTree.*
-
 import cats.effect.*
 import cats.effect.std.*
 import jsonrpclib.fs2.*
@@ -8,23 +6,27 @@ import langoustine.lsp.all.*
 import langoustine.lsp.app.*
 
 case class Index(
-    definitions: Map[Atom.Ref, Span],
-    detectReferences: IntervalTree[Atom.Ref],
+    tree: Metadata[WithSpan],
+    definitions: Map[tree.Atom.Ref, Span],
+    detectReferences: IntervalTree[tree.Atom.Ref],
     text: TextIndex
 )
 object Index:
-  def create(text: String, p: Program): Index =
+  def create(
+      tree: Metadata[WithSpan],
+      text: String,
+      p: tree.Program
+  ): Index =
+    import tree.*
     val defns = p.asses.collect {
-      case WithSpan(span, Statement.Assignment(spannedId, spannedExpr)) =>
-        spannedId.value -> span
+      case Statement.MetadataAssignment(spannedId, spannedExpr) =>
+        spannedId.value -> spannedExpr.span
     }
 
     def extractReferences(
         expression: WithSpan[Expression[WithSpan]]
-    ): Vector[WithSpan[SpannedTree.Atom.Ref]] =
+    ): Vector[WithSpan[Atom.Ref]] =
       def go(e: WithSpan[Expression[WithSpan]]): Vector[WithSpan[Atom.Ref]] =
-        import SpannedTree.*
-
         e.value match
           case NamedData(struct, fields) =>
             fields.collect { case Field.KeyValue(name, value) =>
@@ -41,13 +43,13 @@ object Index:
     end extractReferences
 
     val occurrences = p.asses
-      .flatMap { case WithSpan(_, value) =>
-        value match
-          case Statement.Assignment(id, value) => extractReferences(value)
+      .flatMap { case Statement.MetadataAssignment(id, value) =>
+        extractReferences(value)
       }
       .map { ws => ws.span -> ws.value }
 
     Index(
+      tree,
       defns.toMap,
       IntervalTree.construct(occurrences.toMap),
       TextIndex.construct(text)

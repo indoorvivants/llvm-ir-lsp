@@ -6,6 +6,7 @@ import jsonrpclib.fs2.*
 import langoustine.lsp.*
 import langoustine.lsp.all.*
 import langoustine.lsp.app.*
+import SpannedParsers.*
 
 class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
   import Utils.*
@@ -25,14 +26,16 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       .compile
       .string
       .flatMap { str =>
-        parsers.parse(str) match
+        parse(str) match
           case Left(err) =>
             back.sendMessage(
               s"Failed to parse $err",
               MessageType.Error
             )
           case Right(st) =>
-            state.update(_.updated(documentUri, Index.create(str, st))) *>
+            state.update(
+              _.updated(documentUri, Index.create(SpannedParsers.tree, str, st))
+            ) *>
               back.sendMessage(s"Successfully parsed")
       }
 end Utils
