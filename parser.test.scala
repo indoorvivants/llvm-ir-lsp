@@ -3,6 +3,7 @@ import weaver.*
 import PureTree.*
 import PureParsers.*
 import cats.Show
+import parsley.debug.RemoteView
 
 object ParsingSpec extends FunSuite:
 
@@ -263,7 +264,20 @@ object ParsingSpec extends FunSuite:
 
   test("parses function definition".only) {
     val input =
-      """define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
+      """
+; ModuleID = '/app/example.cpp'
+source_filename = "/app/example.cpp"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+; Declare the string constant as a global constant.
+@.str = private unnamed_addr constant [13 x i8] c"hello world\0A\00"
+
+; External declaration of the puts function
+declare i32 @puts(ptr captures(none)) nounwind
+
+
+define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
   %2 = alloca float, align 4
   store float %0, ptr %2, align 4
   %_2000009 = call dereferenceable_or_null(16) ptr @"_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO"(ptr null, i64 256), !dbg !797
@@ -272,51 +286,64 @@ object ParsingSpec extends FunSuite:
   ret float %4, !dbg !20
 }
 """
-    given tst: Show[Either[ParsingError, tree.Statement]] =
-      s => pprint.apply(s).render
-
+    import parsley.debug.combinator.*
     expect.same(
-      parse(input, functionDefinition),
+      parse(input, program.attach(RemoteView.dill)),
       Right(
-        Statement.FunctionDefinition(
-          (None, Some("dso_local"), None, Some("noundef")),
-          Function(
-            "_Z1tf",
-            Vector(FunctionArgument(ArgumentType("float"), "0")),
-            "float",
-            Vector(Atom.Ref(Id(10)))
-          ),
-          Vector(
-            BodyOperation
-              .Assignment(
-                LocalID("2"),
-                Instruction.Unknown("alloca float, align 4")
-              ),
-            BodyOperation.Instr(
-              Instruction.Unknown("store float %0, ptr %2, align 4")
+        value = Program(
+          asses = Vector(
+            Statement.LineComment(
+              content = " ModuleID = '/app/example.cpp'"
             ),
-            BodyOperation.Assignment(
-              LocalID("_2000009"),
-              Instruction.Call(
-                tail = None,
-                tpe = "ptr",
-                funcName =
-                  "_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO",
-                params = Vector(
-                  FunctionCallParam.Ptr("null"),
-                  FunctionCallParam.Num(256, "i64")
+            Statement.LineComment(
+              content = " Declare the string constant as a global constant."
+            ),
+            Statement.LineComment(
+              content = " External declaration of the puts function"
+            ),
+            Statement.FunctionDefinition(
+              (None, Some("dso_local"), None, Some("noundef")),
+              Function(
+                "_Z1tf",
+                Vector(FunctionArgument(ArgumentType("float"), "0")),
+                "float",
+                Vector(Atom.Ref(Id(10)))
+              ),
+              Vector(
+                BodyOperation
+                  .Assignment(
+                    LocalID("2"),
+                    Instruction.Unknown("alloca float, align 4")
+                  ),
+                BodyOperation.Instr(
+                  Instruction.Unknown("store float %0, ptr %2, align 4")
+                ),
+                BodyOperation.Assignment(
+                  LocalID("_2000009"),
+                  Instruction.Call(
+                    tail = None,
+                    tpe = "ptr",
+                    funcName =
+                      "_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO",
+                    params = Vector(
+                      FunctionCallParam.Ptr("null"),
+                      FunctionCallParam.Num(256, "i64")
+                    )
+                  )
+                ),
+                BodyOperation.Assignment(
+                  LocalID("3"),
+                  Instruction.Unknown("load float, ptr %2, align 4, !dbg !18")
+                ),
+                BodyOperation.Assignment(
+                  LocalID("4"),
+                  Instruction.Unknown("fdiv float %3, 2.000000e+00, !dbg !19")
+                ),
+                BodyOperation.Instr(
+                  Instruction.Unknown("ret float %4, !dbg !20")
                 )
               )
-            ),
-            BodyOperation.Assignment(
-              LocalID("3"),
-              Instruction.Unknown("load float, ptr %2, align 4, !dbg !18")
-            ),
-            BodyOperation.Assignment(
-              LocalID("4"),
-              Instruction.Unknown("fdiv float %3, 2.000000e+00, !dbg !19")
-            ),
-            BodyOperation.Instr(Instruction.Unknown("ret float %4, !dbg !20"))
+            )
           )
         )
       )

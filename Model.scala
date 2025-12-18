@@ -62,6 +62,7 @@ trait Metadata[F[_]]:
         func: Function,
         body: Vector[BodyOperation]
     )
+    case Unknown(raw: String)
 
   case class Program(asses: Vector[Statement])
 

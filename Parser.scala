@@ -1,8 +1,7 @@
 import parsley.Parsley
 import parsley.Parsley.atomic
-import parsley.Parsley.empty
-import parsley.Parsley.pure
-import parsley.Parsley.{many, some}
+import parsley.Parsley.many
+import parsley.Parsley.some
 import parsley.character
 import parsley.character.char
 import parsley.character.satisfy
@@ -10,22 +9,18 @@ import parsley.character.string
 import parsley.combinator.choice
 import parsley.combinator.option
 import parsley.combinator.sepBy
-import parsley.combinator.sepBy1
-import parsley.lift.lift2
-import parsley.lift.lift3
+import parsley.debug.combinator
 import parsley.position.col
 import parsley.position.line
 import parsley.position.offset
-import parsley.position.pos
 import parsley.syntax.character.charLift
 import parsley.syntax.character.stringLift
 import parsley.syntax.zipped.*
-import scala.annotation.experimental
-import parsley.debug.PrintView
-import parsley.debug.combinator
-import cats.syntax.nonEmptyAlternative
 
 case class Caret(line: Int, col: Int, offset: Int)
+
+extension [A](p: Parsley[A])
+  def named(v: String) = p // parsley.debug.combinator.named(p, v)
 
 case class Span(from: Caret, to: Caret):
   def contains(c: Caret) =
@@ -61,14 +56,11 @@ class ParsingError(caret: Caret, text: String)
   //   line.next() + "\n" + nxt
 end ParsingError
 
+@parsley.debuggable
 trait Parsers[F[_]](val tree: Metadata[F]):
   extension [A](p: => Parsley[A]) def spanned: Parsley[F[A]]
 
   import tree.*
-
-  private val sp      = char(' ')
-  private val lfChar  = char('\n')
-  private val crlfStr = string("\r\n")
 
   // atoms and atom-like things
   lazy val fieldName: Parsley[FieldName] = alphanumeric.map(FieldName.apply)
@@ -89,7 +81,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
 
     val untyped: Parsley[Atom.Num] = integer.map(Atom.Num(_, "i32"))
 
-    typed <|> untyped
+    (typed <|> untyped).named("numeric literal")
   end num
 
   lazy val stringExpr: Parsley[Atom.Str] =
@@ -122,8 +114,6 @@ trait Parsers[F[_]](val tree: Metadata[F]):
     (string("distinct") *> lexeme(namedData).spanned)
       .map(Distinct.apply)
 
-  import parsley.debug.combinator.*
-
   // expression
   lazy val expr: Parsley[Expression[F]] =
     lexeme(
@@ -147,78 +137,78 @@ trait Parsers[F[_]](val tree: Metadata[F]):
   private def token[A](p: Parsley[A]): Parsley[A]  = lexeme(atomic(p))
   private def symbol(str: String): Parsley[String] = atomic(string(str))
 
-  import parsley.debug.combinator.*
-  import parsley.debug.PrintView
-
   val nonEmptyString =
     token(character.stringOfSome(c => c != ' ' && c != '(' && c != ')').spanned)
       .named("nonEmptyString")
   val functionName       = llvmIdentifier.spanned
-  val functionReturnType = nonEmptyString
+  val functionReturnType = nonEmptyString.named("functionReturnType")
 
   val localID =
     token(character.stringOfSome(c => c != ' ' && c != '(' && c != ')'))
       .map(LocalID.apply)
+      .named("localID")
 
   val functionArg =
     (
-      nonEmptyString.map(ArgumentType.apply) <~>
-        (option(token("noundef")) *> "%" *> character
-          .stringOfSome(character.digit)
-          .spanned)
+      nonEmptyString.map(ArgumentType.apply),
+      option(token("noundef")) *> "%" *> character
+        .stringOfSome(character.digit)
+        .spanned
     )
-      .map(FunctionArgument.apply)
+      .zipped(FunctionArgument.apply)
+      .named("functionArg")
 
-  val functionArguments = sepBy(functionArg, ",")
+  val functionArguments = sepBy(functionArg, ",").named("functionArguments")
 
-  val debugAttachment = many(token("!dbg " *> ref.spanned))
+  val debugAttachment =
+    many(token("!dbg " *> ref.spanned)).named("debugAttachment")
+
+  enum LinkageAttr:
+    case `private`, internal, available_externally, linkonce, weak, common,
+      appending, extern_weak, linkonce_odr, weak_odr, external
 
   val linkageAttr =
-    List(
-      "private",
-      "internal",
-      "available_externally",
-      "linkonce",
-      "weak",
-      "common",
-      "appending",
-      "extern_weak",
-      "linkonce_odr",
-      "weak_odr",
-      "external"
-    ).map(token).reduce(_ <|> _)
+    LinkageAttr.values
+      .map(_.toString())
+      .map(token)
+      .reduce(_ | _)
+      .named("linkageAttr")
 
-  val parameterAttr = // TODO: verify
-    List(
-      "noalias",
-      "nocapture",
-      "noredzone",
-      "noinline",
-      "nounwind",
-      "optnone",
-      "optsize",
-      "readnone",
-      "readonly",
-      "returns_twice",
-      "ssp",
-      "sspreq",
-      "sspstrong",
-      "swiftself",
-      "swifterror",
-      "writeonly",
-      "noundef"
-    ).map(token).reduce(_ <|> _) <|>
+  enum ParameterAttrSimple:
+    case noalias, nocapture, noredzone, noinline, nounwind, optnone, optsize,
+      readnone, readonly, returns_twice, ssp, sspreq, sspstrong, swiftself,
+      swifterror, writeonly, noundef
+
+  val parameterAttr = ( // TODO: verify
+    choice(
+      ParameterAttrSimple.values.map(_.toString()).map(token).reduce(_ | _),
       (
-        string("dereferenceable_or_null("),
+        token("dereferenceable_or_null("),
         integer,
-        string(")")
+        token(")")
       ).zipped(_ + _.toString + _)
+    )
+  ).named("parameterAttr")
+
+  enum PreemptionAttr:
+    case dso_local, dso_preemptable
 
   val preemptionAttr =
-    List("dso_preemptable", "dso_local").map(token).reduce(_ <|> _)
+    PreemptionAttr.values
+      .map(_.toString())
+      .map(token)
+      .reduce(_ | _)
+      .named("preemptionAttr")
+
+  enum VisibilityAttr:
+    case default, hidden, `protected`
 
   val visibilityAttr =
-    List("default", "hidden", "protected").map(token).reduce(_ <|> _)
+    VisibilityAttr.values
+      .map(_.toString())
+      .map(token)
+      .reduce(_ | _)
+      .named("visibilityAttr")
 
   val functionAttrs =
     (
@@ -226,9 +216,9 @@ trait Parsers[F[_]](val tree: Metadata[F]):
       option(preemptionAttr), // preemption specifier
       option(visibilityAttr), // visibility
       option(parameterAttr)
-    ).zipped
+    ).zipped.named("functionAttrs")
 
-  val someRandomBullshit = token("#" *> integer)
+  val someRandomBullshit = token("#" *> integer).named("attributesAttachment")
 
   val intrinsic =
     choice("call", "load", "alloca", "store", "fdiv", "ret")
@@ -244,13 +234,13 @@ trait Parsers[F[_]](val tree: Metadata[F]):
         c == '_' ||
         c == '.'
 
-    "@" *> choice(
+    ("@" *> choice(
       '"' *> character.stringOfSome(_ != '"') <* '"',
       (
         character.satisfy(first),
         character.stringOfMany(character.satisfy(c => first(c) || c.isDigit))
       ).zipped(_ +: _)
-    )
+    )).named("llvmIdentifier")
   end llvmIdentifier
 
   object instructions:
@@ -276,7 +266,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
           many(parameterAttr) <* ws,
           functionReturnType <* ws,
           llvmIdentifier.spanned <* ws,
-          params <* ws,
+          params.named("call params") <* ws,
           option("," *> ws *> debugAttachment)
         ).zipped:
           case (_, tail, attrs, retType, funcName, params, debug) =>
@@ -288,13 +278,13 @@ trait Parsers[F[_]](val tree: Metadata[F]):
     choice(
       instructions.call.instr,
       character.stringOfMany(_ != '\n').map(Instruction.Unknown.apply)
-    )
+    ).named("operation")
 
   lazy val funcAssign =
     (
       "%" *> localID.spanned <* ws,
       "=" *> ws *> funcOp
-    ).zipped((i, op) => BodyOperation.Assignment(i, op))
+    ).zipped((i, op) => BodyOperation.Assignment(i, op)).named("assignment")
 
   lazy val functionBody =
     token("{") *>
@@ -306,7 +296,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
             funcOp.map(BodyOperation.Instr.apply)
           ) <*
           some(character.newline),
-        symbol("}")
+        token("}")
       )
 
   lazy val functionType =
@@ -327,37 +317,40 @@ trait Parsers[F[_]](val tree: Metadata[F]):
       functionType,
       functionBody.map(_.toVector)
     ).zipped(Statement.FunctionDefinition.apply)
+      .named("functionDefinition")
 
-  val lineComment = skipWhitespace *> ";" *> character
+  val lineComment = ws *> ";" *> character
     .stringOfSome(_ != '\n')
     .spanned
     .map(Statement.LineComment.apply)
+    .named("lineComment")
 
-  // assignment
   lazy val debugAssignment: Parsley[Statement] =
     (
       lexeme(ref).spanned <* token(ASS),
       lexeme(expr).spanned
-    ).zipped
-      .map(Statement.MetadataAssignment.apply)
-
-  // whole section
-  val sep: Parsley[Unit] = (crlfStr <|> lfChar).void
+    ).zipped(Statement.MetadataAssignment.apply)
+      .named("debugAssignment")
 
   lazy val statement: Parsley[Statement] =
-    choice(debugAssignment, functionDefinition, lineComment)
+    choice(
+      debugAssignment,
+      functionDefinition,
+      lineComment,
+      parsley.combinator
+        .manyTill(character.item, character.endOfLine)
+        .void
+        .as(Statement.Unknown(""))
+    ).named("statement")
 
   lazy val statements: Parsley[List[Statement]] =
-    many(character.newline) *>
-      sepBy(
-        statement,
-        some(character.newline)
-      ) <* character.whitespaces <* Parsley.eof
+    parsley.combinator.manyTill(statement <* character.whitespaces, Parsley.eof)
 
   lazy val program: Parsley[Program] = statements
-    .map(_.toVector)
+    .map(_.toVector.filter:
+      case Statement.Unknown(raw) if raw.isBlank() => false
+      case _                                       => true)
     .map(Program.apply)
-    <* Parsley.eof
 
   val LP: Parsley[Char]        = '('
   val RP: Parsley[Char]        = ')'

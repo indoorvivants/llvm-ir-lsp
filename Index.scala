@@ -1,10 +1,3 @@
-import cats.effect.*
-import cats.effect.std.*
-import jsonrpclib.fs2.*
-import langoustine.lsp.*
-import langoustine.lsp.all.*
-import langoustine.lsp.app.*
-
 case class Index(
     tree: Metadata[WithSpan],
     definitions: Map[tree.Atom.Ref, Span],
