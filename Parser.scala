@@ -3,13 +3,11 @@ import parsley.Parsley.atomic
 import parsley.Parsley.many
 import parsley.Parsley.some
 import parsley.character
-import parsley.character.char
 import parsley.character.satisfy
 import parsley.character.string
 import parsley.combinator.choice
 import parsley.combinator.option
 import parsley.combinator.sepBy
-import parsley.debug.combinator
 import parsley.position.col
 import parsley.position.line
 import parsley.position.offset
@@ -20,7 +18,7 @@ import parsley.syntax.zipped.*
 case class Caret(line: Int, col: Int, offset: Int)
 
 extension [A](p: Parsley[A])
-  def named(v: String) = p // parsley.debug.combinator.named(p, v)
+  def named(v: String) = parsley.debug.combinator.named(p, v)
 
 case class Span(from: Caret, to: Caret):
   def contains(c: Caret) =
@@ -39,21 +37,12 @@ private val caret: Parsley[Caret] =
 private def withSpan[A](p: => Parsley[A]): Parsley[WithSpan[A]] =
   (caret, p, caret).zipped((s, a, e) => WithSpan(Span(s, e), a))
 
-extension [A](p: => Parsley[A])
-  def spanned: Parsley[WithSpan[A]] =
-    withSpan(p)
-
 class ParsingError(caret: Caret, text: String)
     extends Exception(
       s"Parsing failed at line ${caret.line} column ${caret.col}"
     ):
 
   override lazy val toString = text
-
-  // def render =
-  //   val line = text.linesIterator.drop(caret.line)
-  //   val nxt  = (" " * caret.col) + Console.RED + "^" + Console.RESET
-  //   line.next() + "\n" + nxt
 end ParsingError
 
 @parsley.debuggable
@@ -62,73 +51,79 @@ trait Parsers[F[_]](val tree: Metadata[F]):
 
   import tree.*
 
-  // atoms and atom-like things
-  lazy val fieldName: Parsley[FieldName] = alphanumeric.map(FieldName.apply)
-  lazy val structName: Parsley[Struct]   = alphanumeric.map(Struct.apply)
-  lazy val const: Parsley[Atom.Const]    = alphanumeric.map(Atom.Const.apply)
-  lazy val id: Parsley[Id]               = integer.map(Id.apply)
-  lazy val ref: Parsley[Atom.Ref] =
-    ('!' *> id).map(Atom.Ref.apply)
+  object Metadata:
+    // atoms and atom-like things
+    lazy val fieldName: Parsley[FieldName] = alphanumeric.map(FieldName.apply)
+    lazy val structName: Parsley[Struct]   = alphanumeric.map(Struct.apply)
+    lazy val const: Parsley[Atom.Const]    = alphanumeric.map(Atom.Const.apply)
+    lazy val id: Parsley[Id]               = integer.map(Id.apply)
+    lazy val ref: Parsley[Atom.Ref] =
+      ('!' *> id).map(Atom.Ref.apply)
 
-  lazy val num: Parsley[Atom.Num] =
-    val withType =
-      ('i' <|> 'u', integer).zipped.map((c, i) => s"$c$i")
+    lazy val num: Parsley[Atom.Num] =
+      val withType =
+        ('i' <|> 'u', integer).zipped.map((c, i) => s"$c$i")
 
-    val typed: Parsley[Atom.Num] =
-      (withType <* character.whitespaces, integer).zipped.map((sz, i) =>
-        Atom.Num(i, sz)
+      val typed: Parsley[Atom.Num] =
+        (withType <* ws, integer).zipped.map((sz, i) => Atom.Num(i, sz))
+
+      val untyped: Parsley[Atom.Num] = integer.map(Atom.Num(_, "i32"))
+
+      (typed <|> untyped).named("numeric literal")
+    end num
+
+    lazy val stringExpr: Parsley[Atom.Str] =
+      val quotedStr: Parsley[Atom.Str] =
+        ('"' *> many(satisfy(_ != '"')) <* '"').map(cs => Atom.Str(cs.mkString))
+
+      val withExcl: Parsley[Atom.Str] = atomic(EXCL *> quotedStr)
+
+      withExcl <|> quotedStr
+    end stringExpr
+
+    lazy val bag: Parsley[Bag] = EXCL *>
+      (LB *> sepBy(expr.spanned, COMMA) <* RB)
+        .map(_.toVector)
+        .map(Bag.apply)
+
+    lazy val fieldValue: Parsley[Field.KeyValue] =
+      (fieldName <* COLON, expr.spanned).zipped.map(Field.KeyValue.apply)
+
+    lazy val namedData: Parsley[NamedData] =
+      (
+        EXCL *> structName,
+        LP *> sepBy(lexeme(fieldValue), COMMA)
+          .map(_.toVector) <* RP
+      ).zipped.map(NamedData.apply)
+
+    lazy val distinctNamed: Parsley[Distinct] =
+      (string("distinct") *> lexeme(namedData).spanned)
+        .map(Distinct.apply)
+
+    // expression
+    lazy val expr: Parsley[Expression[F]] =
+      lexeme(
+        choice(
+          distinctNamed,
+          atomic(ref),
+          atomic(bag),
+          atomic(namedData),
+          num,
+          const,
+          stringExpr
+        )
       )
 
-    val untyped: Parsley[Atom.Num] = integer.map(Atom.Num(_, "i32"))
+    end expr
 
-    (typed <|> untyped).named("numeric literal")
-  end num
+    lazy val debugAssignment: Parsley[Statement] =
+      (
+        lexeme(ref).spanned <* token(ASS),
+        lexeme(expr).spanned
+      ).zipped(Statement.MetadataAssignment.apply)
+        .named("debugAssignment")
 
-  lazy val stringExpr: Parsley[Atom.Str] =
-    val quotedStr: Parsley[Atom.Str] =
-      ('"' *> many(satisfy(_ != '"')) <* '"').map(cs => Atom.Str(cs.mkString))
-
-    val withExcl: Parsley[Atom.Str] = atomic(EXCL *> quotedStr)
-
-    withExcl <|> quotedStr
-  end stringExpr
-
-  // composite expressions
-
-  lazy val bag: Parsley[Bag] = EXCL *>
-    (LB *> sepBy(expr.spanned, COMMA) <* RB)
-      .map(_.toVector)
-      .map(Bag.apply)
-
-  lazy val fieldValue: Parsley[Field.KeyValue] =
-    (fieldName <* COLON, expr.spanned).zipped.map(Field.KeyValue.apply)
-
-  lazy val namedData: Parsley[NamedData] =
-    (
-      EXCL *> structName,
-      LP *> sepBy(lexeme(fieldValue), COMMA)
-        .map(_.toVector) <* RP
-    ).zipped.map(NamedData.apply)
-
-  lazy val distinctNamed: Parsley[Distinct] =
-    (string("distinct") *> lexeme(namedData).spanned)
-      .map(Distinct.apply)
-
-  // expression
-  lazy val expr: Parsley[Expression[F]] =
-    lexeme(
-      choice(
-        distinctNamed,
-        atomic(ref),
-        atomic(bag),
-        atomic(namedData),
-        num,
-        const,
-        stringExpr
-      )
-    )
-
-  end expr
+  end Metadata
 
   private val skipWhitespace = character.spaces.void
 
@@ -161,7 +156,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
   val functionArguments = sepBy(functionArg, ",").named("functionArguments")
 
   val debugAttachment =
-    many(token("!dbg " *> ref.spanned)).named("debugAttachment")
+    many(token("!dbg " *> Metadata.ref.spanned)).named("debugAttachment")
 
   enum LinkageAttr:
     case `private`, internal, available_externally, linkonce, weak, common,
@@ -252,8 +247,9 @@ trait Parsers[F[_]](val tree: Metadata[F]):
             choice(
               lexeme("ptr") *>
                 alphanumeric.spanned.map(FunctionCallParam.Ptr.apply) <* ws,
-              ws *> num.map(atom =>
-                FunctionCallParam.Num(atom.value, atom.tpe)
+              ws *> Metadata.num.map(
+                atom => // TODO: provide a generic parser for LLVM atoms
+                  FunctionCallParam.Num(atom.value, atom.tpe)
               ) <* ws
             ),
             ","
@@ -325,16 +321,9 @@ trait Parsers[F[_]](val tree: Metadata[F]):
     .map(Statement.LineComment.apply)
     .named("lineComment")
 
-  lazy val debugAssignment: Parsley[Statement] =
-    (
-      lexeme(ref).spanned <* token(ASS),
-      lexeme(expr).spanned
-    ).zipped(Statement.MetadataAssignment.apply)
-      .named("debugAssignment")
-
   lazy val statement: Parsley[Statement] =
     choice(
-      debugAssignment,
+      Metadata.debugAssignment,
       functionDefinition,
       lineComment,
       parsley.combinator
@@ -376,9 +365,6 @@ trait Parsers[F[_]](val tree: Metadata[F]):
 
   def parse[A](s: String, parser: Parsley[A]): Either[ParsingError, A] =
     parseWithPosition(parser, s)
-
-  def parseExpr(s: String): Either[ParsingError, Expression[F]] =
-    parseWithPosition(expr, s)
 
   private def parseWithPosition[A](
       p: Parsley[A],

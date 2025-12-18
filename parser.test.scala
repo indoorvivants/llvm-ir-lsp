@@ -7,6 +7,8 @@ import parsley.debug.RemoteView
 
 object ParsingSpec extends FunSuite:
 
+  private def parseExpr(s: String) = parse(s, Metadata.expr)
+
   test("parse const expression") {
     expect.same(parseExpr("DWARF"), Right(Atom.Const("DWARF")))
   }
@@ -250,7 +252,7 @@ object ParsingSpec extends FunSuite:
     )
   }
 
-  test("parses LLVM identifiers correctly".only) {
+  test("parses LLVM identifiers correctly") {
     val samples =
       List(
         """@"_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO"""" -> "_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO",
@@ -262,7 +264,7 @@ object ParsingSpec extends FunSuite:
     )
   }
 
-  test("parses function definition".only) {
+  test("parses function definition") {
     val input =
       """
 ; ModuleID = '/app/example.cpp'
