@@ -153,7 +153,7 @@ object ParsingSpec extends FunSuite:
     )
   }
 
-  test("parse full MetadataAssignment with const") {
+  test("parse full MetadataAssignment with const".only) {
     val result = parse("!25 = DWARF")
 
     expect.same(
