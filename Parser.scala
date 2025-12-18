@@ -23,6 +23,7 @@ import parsley.syntax.zipped.*
 import scala.annotation.experimental
 import parsley.debug.PrintView
 import parsley.debug.combinator
+import cats.syntax.nonEmptyAlternative
 
 case class Caret(line: Int, col: Int, offset: Int)
 
@@ -142,7 +143,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
   private val skipWhitespace = character.spaces.void
 
   private def lexeme[A](p: Parsley[A]): Parsley[A] =
-    skipWhitespace ~> p <~ skipWhitespace
+    p <~ skipWhitespace
   private def token[A](p: Parsley[A]): Parsley[A]  = lexeme(atomic(p))
   private def symbol(str: String): Parsley[String] = atomic(string(str))
 
@@ -152,8 +153,12 @@ trait Parsers[F[_]](val tree: Metadata[F]):
   val nonEmptyString =
     token(character.stringOfSome(c => c != ' ' && c != '(' && c != ')').spanned)
       .named("nonEmptyString")
-  val functionName       = "@" *> nonEmptyString
+  val functionName       = llvmIdentifier.spanned
   val functionReturnType = nonEmptyString
+
+  val localID =
+    token(character.stringOfSome(c => c != ' ' && c != '(' && c != ')'))
+      .map(LocalID.apply)
 
   val functionArg =
     (
@@ -202,7 +207,12 @@ trait Parsers[F[_]](val tree: Metadata[F]):
       "swifterror",
       "writeonly",
       "noundef"
-    ).map(token).reduce(_ <|> _)
+    ).map(token).reduce(_ <|> _) <|>
+      (
+        string("dereferenceable_or_null("),
+        integer,
+        string(")")
+      ).zipped(_ + _.toString + _)
 
   val preemptionAttr =
     List("dso_preemptable", "dso_local").map(token).reduce(_ <|> _)
@@ -223,23 +233,83 @@ trait Parsers[F[_]](val tree: Metadata[F]):
   val intrinsic =
     choice("call", "load", "alloca", "store", "fdiv", "ret")
 
-  val funcOp =
-    intrinsic *> character.stringOfSome(_ != '\n')
+  val ws = character.spaces
 
-  val funcAssign: Parsley[(Int, String)] =
-    "%" *> integer <* character.spaces <~> ("=" *> character.spaces *> funcOp)
+  lazy val llvmIdentifier =
+    // [%@][-a-zA-Z$._][-a-zA-Z$._0-9]*
+    val first = (c: Char) =>
+      c == '-' || (c >= 'a' && c <= 'z') ||
+        (c >= 'A' && c <= 'Z') ||
+        c == '$' ||
+        c == '_' ||
+        c == '.'
 
-  val functionBody =
+    "@" *> choice(
+      '"' *> character.stringOfSome(_ != '"') <* '"',
+      (
+        character.satisfy(first),
+        character.stringOfMany(character.satisfy(c => first(c) || c.isDigit))
+      ).zipped(_ +: _)
+    )
+  end llvmIdentifier
+
+  object instructions:
+    object call:
+      private lazy val tail = choice("tail", "musttail", "notail")
+      private lazy val params =
+        "(" *>
+          parsley.combinator.sepBy(
+            choice(
+              lexeme("ptr") *>
+                alphanumeric.spanned.map(FunctionCallParam.Ptr.apply) <* ws,
+              ws *> num.map(atom =>
+                FunctionCallParam.Num(atom.value, atom.tpe)
+              ) <* ws
+            ),
+            ","
+          ) <* ")"
+
+      lazy val instr =
+        (
+          "call" <* ws,
+          option(tail) <* ws,
+          many(parameterAttr) <* ws,
+          functionReturnType <* ws,
+          llvmIdentifier.spanned <* ws,
+          params <* ws,
+          option("," *> ws *> debugAttachment)
+        ).zipped:
+          case (_, tail, attrs, retType, funcName, params, debug) =>
+            Instruction.Call(tail, retType, funcName, params.toVector)
+    end call
+  end instructions
+
+  lazy val funcOp =
+    choice(
+      instructions.call.instr,
+      character.stringOfMany(_ != '\n').map(Instruction.Unknown.apply)
+    )
+
+  lazy val funcAssign =
+    (
+      "%" *> localID.spanned <* ws,
+      "=" *> ws *> funcOp
+    ).zipped((i, op) => BodyOperation.Assignment(i, op))
+
+  lazy val functionBody =
     token("{") *>
       character.newline *>
       parsley.combinator.manyTill(
-        character.spaces *> choice(funcAssign, funcOp.named("funcOp")) <* some(
-          character.newline
-        ),
+        ws *>
+          choice(
+            funcAssign,
+            funcOp.map(BodyOperation.Instr.apply)
+          ) <*
+          some(character.newline),
         symbol("}")
       )
 
-  val functionType =
+  lazy val functionType =
     (
       functionReturnType,
       functionName,
@@ -251,7 +321,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
         case (retType, name, args, _, dbg) =>
           Function(name, args.toVector, retType, dbg.toVector)
 
-  val functionDefinition =
+  lazy val functionDefinition =
     token("define") *> (
       functionAttrs,
       functionType,

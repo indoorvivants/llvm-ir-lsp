@@ -3,6 +3,10 @@ object Id:
   inline def apply(i: Int): Id             = i
   extension (id: Id) inline def value: Int = id
 
+opaque type LocalID = String
+object LocalID:
+  inline def apply(i: String): LocalID = i
+
 opaque type FieldName = String
 object FieldName:
   inline def apply(i: String): FieldName = i
@@ -32,7 +36,23 @@ trait Metadata[F[_]]:
   case class NamedData(struct: Struct, fields: Vector[Field])
       extends Expression[F]
 
-  type FunctionBodyLine = (Int, String) | String
+  enum FunctionCallParam:
+    case Num(value: Int, tpe: String)
+    case Ptr(what: F[String])
+
+  enum Instruction:
+    case Call(
+        tail: Option[String],
+        tpe: F[String],
+        funcName: F[String],
+        params: Vector[FunctionCallParam]
+    )
+    case Unknown(raw: String)
+
+  enum BodyOperation extends Expression[F]:
+    case Instr(tpe: Instruction)
+    case Assignment(to: F[LocalID], instr: Instruction)
+    case SetLabel(id: F[String])
 
   enum Statement extends Expression[F]:
     case LineComment(content: F[String])
@@ -40,7 +60,7 @@ trait Metadata[F[_]]:
     case FunctionDefinition(
         attrs: (Option[String], Option[String], Option[String], Option[String]),
         func: Function,
-        body: Vector[FunctionBodyLine]
+        body: Vector[BodyOperation]
     )
 
   case class Program(asses: Vector[Statement])

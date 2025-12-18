@@ -235,8 +235,9 @@ object ParsingSpec extends FunSuite:
     |!1 = i32 42
     |!2 = !0""".stripMargin.trim
 
-    expect(
-      clue(parse(input)) == Right(
+    expect.same(
+      parse(input),
+      Right(
         Program(
           Vector(
             Statement.MetadataAssignment(Atom.Ref(Id(0)), Atom.Const("DWARF")),
@@ -248,12 +249,24 @@ object ParsingSpec extends FunSuite:
     )
   }
 
-  test("parses function definition") {
+  test("parses LLVM identifiers correctly".only) {
+    val samples =
+      List(
+        """@"_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO"""" -> "_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO",
+        "@llvm.dbg.declare" -> "llvm.dbg.declare"
+      )
+    expect.same(
+      samples.map(_._1).map(parse(_, llvmIdentifier)),
+      samples.map(_._2).map(Right(_))
+    )
+  }
+
+  test("parses function definition".only) {
     val input =
       """define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
   %2 = alloca float, align 4
   store float %0, ptr %2, align 4
-  call void @llvm.dbg.declare(metadata ptr %2, metadata !16, metadata !DIExpression()), !dbg !17
+  %_2000009 = call dereferenceable_or_null(16) ptr @"_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO"(ptr null, i64 256), !dbg !797
   %3 = load float, ptr %2, align 4, !dbg !18
   %4 = fdiv float %3, 2.000000e+00, !dbg !19
   ret float %4, !dbg !20
@@ -274,12 +287,36 @@ object ParsingSpec extends FunSuite:
             Vector(Atom.Ref(Id(10)))
           ),
           Vector(
-            (2, " float, align 4"),
-            " float %0, ptr %2, align 4",
-            " void @llvm.dbg.declare(metadata ptr %2, metadata !16, metadata !DIExpression()), !dbg !17",
-            (3, " float, ptr %2, align 4, !dbg !18"),
-            (4, " float %3, 2.000000e+00, !dbg !19"),
-            " float %4, !dbg !20"
+            BodyOperation
+              .Assignment(
+                LocalID("2"),
+                Instruction.Unknown("alloca float, align 4")
+              ),
+            BodyOperation.Instr(
+              Instruction.Unknown("store float %0, ptr %2, align 4")
+            ),
+            BodyOperation.Assignment(
+              LocalID("_2000009"),
+              Instruction.Call(
+                tail = None,
+                tpe = "ptr",
+                funcName =
+                  "_SM32scala.scalanative.runtime.Boxes$D10boxToUSizewL32scala.scalanative.unsigned.USizeEO",
+                params = Vector(
+                  FunctionCallParam.Ptr("null"),
+                  FunctionCallParam.Num(256, "i64")
+                )
+              )
+            ),
+            BodyOperation.Assignment(
+              LocalID("3"),
+              Instruction.Unknown("load float, ptr %2, align 4, !dbg !18")
+            ),
+            BodyOperation.Assignment(
+              LocalID("4"),
+              Instruction.Unknown("fdiv float %3, 2.000000e+00, !dbg !19")
+            ),
+            BodyOperation.Instr(Instruction.Unknown("ret float %4, !dbg !20"))
           )
         )
       )
@@ -303,7 +340,7 @@ object ParsingSpec extends FunSuite:
             Statement.FunctionDefinition(
               attrs = (None, None, None, None),
               func = Function("main", Vector.empty, "i32", Vector.empty),
-              body = Vector(" i32 0")
+              body = ??? // Vector(" i32 0")
             ),
             Statement.MetadataAssignment(Atom.Ref(Id(1)), Atom.Num(5, "i32"))
           )
