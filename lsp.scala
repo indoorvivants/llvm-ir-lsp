@@ -1,17 +1,17 @@
-import SpannedTree.*
+package llvm_lsp
 
 import cats.effect.*
-import cats.effect.std.*
-import fs2.io.file.*
 import jsonrpclib.fs2.*
 import langoustine.lsp.*
 import langoustine.lsp.all.*
 import langoustine.lsp.app.*
 
+import SpannedTree.*
+
 object LLVM_Lsp extends LangoustineApp.Simple:
   def server: IO[LSPBuilder[cats.effect.IO]] =
     scribe.cats.io.info("Hello from LLVM LSP!") *>
-    IO.ref(Map.empty).map(lsp)
+      IO.ref(Map.empty).map(lsp)
 
 def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
   val utils = Utils(state)
@@ -46,26 +46,30 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
         }
       }
     }
-    // .handleRequest(textDocument.hover) { in =>
-    //   utils.get(in.params.textDocument.uri).flatMap { idx =>
-    //     utils.definitionSpan(idx, in.params.position).map {
-    //       case head :: tail =>
-    //         if tail.nonEmpty then
-    //           scribe.warn(s"Unexpectedly, got several definitions: $tail")
+    .handleRequest(textDocument.hover) { in =>
+      utils.get(in.params.textDocument.uri).flatMap { idx =>
+        utils.definitionSpan(idx, in.params.position).map { l =>
+          val x: Opt[Hover] = l match
+            case head :: tail =>
+              if tail.nonEmpty then
+                scribe.warn(s"Unexpectedly, got several definitions: $tail")
 
-    //         Opt(
-    //           Hover(
-    //             contents = MarkedString(
-    //               MarkedString.S0(language = "llvm", idx.text.sliceOut(head))
-    //             ),
-    //             range = Opt(head.toRange)
-    //           )
-    //         )
-    //       case Nil =>
-    //         Opt.empty
-    //     }
-    //   }
-    // }
+              Opt(
+                Hover(
+                  contents = MarkedString(
+                    MarkedString.S0(language = "llvm", idx.text.sliceOut(head))
+                  ),
+                  range = Opt(head.toRange)
+                )
+              )
+            case _ =>
+              Opt.empty
+          end x
+
+          x
+        }
+      }
+    }
     .handleRequest(textDocument.documentSymbol) { in =>
       utils.get(in.params.textDocument.uri).map { idx =>
         Opt {

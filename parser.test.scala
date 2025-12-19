@@ -1,9 +1,10 @@
+package llvm_lsp
+
+import parsley.debug.RemoteView
 import weaver.*
 
-import PureTree.*
 import PureParsers.*
-import cats.Show
-import parsley.debug.RemoteView
+import PureTree.*
 
 object ParsingSpec extends FunSuite:
 
@@ -153,7 +154,7 @@ object ParsingSpec extends FunSuite:
     )
   }
 
-  test("parse full MetadataAssignment with const".only) {
+  test("parse full MetadataAssignment with const") {
     val result = parse("!25 = DWARF")
 
     expect.same(
@@ -287,6 +288,9 @@ define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
   %4 = fdiv float %3, 2.000000e+00, !dbg !19
   ret float %4, !dbg !20
 }
+
+
+!1 = !{!2, i32 5}
 """
     import parsley.debug.combinator.*
     expect.same(
@@ -345,37 +349,22 @@ define dso_local noundef float @_Z1tf(float noundef %0) #0 !dbg !10 {
                   Instruction.Unknown("ret float %4, !dbg !20")
                 )
               )
+            ),
+            Statement.MetadataAssignment(
+              id = Atom.Ref(Id(1)),
+              value = Bag(
+                exprs = Vector(
+                  Atom.Ref(Id(2)),
+                  Atom.Num(
+                    value = 5,
+                    tpe = "i32"
+                  )
+                )
+              )
             )
           )
         )
       )
     )
   }
-
-  test("mixed definitions") {
-    val input = """
-                  |; This is a comment
-                  |define i32 @main() {
-                  |  ret i32 0
-                  |}
-                  |!1 = i32 5""".stripMargin
-
-    expect.same(
-      parse(input),
-      Right(
-        Program(
-          Vector(
-            Statement.LineComment(" This is a comment"),
-            Statement.FunctionDefinition(
-              attrs = (None, None, None, None),
-              func = Function("main", Vector.empty, "i32", Vector.empty),
-              body = ??? // Vector(" i32 0")
-            ),
-            Statement.MetadataAssignment(Atom.Ref(Id(1)), Atom.Num(5, "i32"))
-          )
-        )
-      )
-    )
-  }
-
 end ParsingSpec

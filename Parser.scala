@@ -1,3 +1,5 @@
+package llvm_lsp
+
 import parsley.Parsley
 import parsley.Parsley.atomic
 import parsley.Parsley.many
@@ -18,7 +20,7 @@ import parsley.syntax.zipped.*
 case class Caret(line: Int, col: Int, offset: Int)
 
 extension [A](p: Parsley[A])
-  def named(v: String) = parsley.debug.combinator.named(p, v)
+  def named(v: String) = p // parsley.debug.combinator.named(p, v)
 
 case class Span(from: Caret, to: Caret):
   def contains(c: Caret) =
@@ -97,7 +99,7 @@ trait Parsers[F[_]](val tree: Metadata[F]):
       ).zipped.map(NamedData.apply)
 
     lazy val distinctNamed: Parsley[Distinct] =
-      (string("distinct") *> lexeme(namedData).spanned)
+      (token("distinct") *> namedData.spanned)
         .map(Distinct.apply)
 
     // expression
@@ -341,15 +343,17 @@ trait Parsers[F[_]](val tree: Metadata[F]):
       case _                                       => true)
     .map(Program.apply)
 
-  val LP: Parsley[Char]        = '('
-  val RP: Parsley[Char]        = ')'
-  val LB: Parsley[Char]        = '{'
-  val RB: Parsley[Char]        = '}'
-  val ASS: Parsley[Char]       = '='
-  val SEMICOLON: Parsley[Char] = ';'
-  val COLON: Parsley[Char]     = ':'
-  val EXCL: Parsley[Char]      = '!'
-  val COMMA: Parsley[Char]     = ','
+  inline def char(c: Char) = character.char(c) <~ ws
+
+  val LP: Parsley[Char]        = char('(')
+  val RP: Parsley[Char]        = char(')')
+  val LB: Parsley[Char]        = char('{')
+  val RB: Parsley[Char]        = char('}')
+  val ASS: Parsley[Char]       = char('=')
+  val SEMICOLON: Parsley[Char] = char(';')
+  val COLON: Parsley[Char]     = char(':')
+  val EXCL: Parsley[Char]      = char('!')
+  val COMMA: Parsley[Char]     = char(',')
 
   lazy val integer: Parsley[Int] =
     character.stringOfSome(character.digit).map(_.toInt)

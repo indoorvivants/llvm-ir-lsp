@@ -1,3 +1,5 @@
+package llvm_lsp
+
 import scala.collection.SortedMap
 
 case class TextIndex(lines: SortedMap[Int, Span], text: String):

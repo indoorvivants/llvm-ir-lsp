@@ -1,3 +1,5 @@
+package llvm_lsp
+
 case class Index(
     tree: Metadata[WithSpan],
     definitions: Map[tree.Atom.Ref, Span],

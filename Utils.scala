@@ -1,15 +1,13 @@
-import SpannedTree.*
+package llvm_lsp
+
 import cats.effect.*
-import cats.effect.std.*
 import fs2.io.file.*
-import jsonrpclib.fs2.*
 import langoustine.lsp.*
 import langoustine.lsp.all.*
-import langoustine.lsp.app.*
+
 import SpannedParsers.*
 
 class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
-  import Utils.*
   def get(u: DocumentUri) =
     state.get.flatMap(
       _.get(u)

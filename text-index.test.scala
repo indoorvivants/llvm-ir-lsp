@@ -1,3 +1,5 @@
+package llvm_lsp
+
 object TextIndexSpec extends weaver.FunSuite:
   test("basics") {
     val text =
@@ -7,7 +9,7 @@ object TextIndexSpec extends weaver.FunSuite:
       | asdasd
       |asdasdasd
       |asdasdasdasd
-      |   
+      |
       |abstract class sd
       |asdasd""".stripMargin
 

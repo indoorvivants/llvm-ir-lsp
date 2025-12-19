@@ -1,3 +1,5 @@
+package llvm_lsp
+
 object IntervalTreeSpec extends weaver.FunSuite:
   test("basics") {
     def c(off: Int) = Caret(0, 0, off)

@@ -1,15 +1,15 @@
+package llvm_lsp
+
 import java.nio.file.Path
-import scala.util.Using
-import java.io.FileReader
-import upickle.core.CharBuilder.apply
-import fs2.io.file.Files
-import cats.effect.IO
 import java.nio.file.Paths
 
+import cats.effect.IO
 import cats.syntax.all.*
+import fs2.io.file.Files
 import langoustine.lsp.structures.Position
 
-import SpannedParsers.*, tree.Program
+import SpannedParsers.*
+import tree.Program
 
 object IndexSpec extends weaver.SimpleIOSuite:
   test("full file indexing") {
