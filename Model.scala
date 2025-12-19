@@ -1,3 +1,5 @@
+package llvm_lsp
+
 opaque type Id = Int
 object Id:
   inline def apply(i: Int): Id             = i
