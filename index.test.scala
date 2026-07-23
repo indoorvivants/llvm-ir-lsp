@@ -145,11 +145,11 @@ object IndexSpec extends weaver.SimpleIOSuite:
         .collectFirst { case (sp, "_Z1tf") => sp }
         .get
       val mid = (callSite.from.offset + callSite.to.offset) / 2
-      val defnLocs = idx.functionReferences
+      val defnEntries = idx.functionReferences
         .resolve(mid)
         .flatMap(idx.functionDefinitions.get)
-      // Definition span for @_Z1tf sits on the `define ...` line.
-      expect(defnLocs.contains(idx.functionDefinitions("_Z1tf")))
+      // Definition entry for @_Z1tf sits on the `define ...` line.
+      expect(defnEntries.contains(idx.functionDefinitions("_Z1tf")))
     }
   }
 

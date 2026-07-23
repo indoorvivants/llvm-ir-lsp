@@ -11,21 +11,37 @@ import SpannedParsers.*
 
 class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
   def get(u: DocumentUri) =
+    val nu = normalizeUri(u)
     state.get.flatMap(
-      _.get(u)
+      _.get(nu)
         .map(IO.pure)
         .getOrElse(
           IO.raiseError(
-            new RuntimeException(s"No valid document found for ${u}")
+            new RuntimeException(s"No valid document found for ${nu}")
           )
         )
     )
 
+  // Canonical URI form: `file://<absolute-path>` with three slashes on Unix
+  // (empty authority + leading `/`). LSP clients (Neovim, VS Code) emit this
+  // form, and `java.io.File#toURI` produces it. Store keys in this form so
+  // request URIs and scan URIs collide correctly in the state Map.
   private def uriToPath(u: DocumentUri): Path =
-    Path(u.value.drop("file:".length))
+    val s = u.value
+    val stripped =
+      if s.startsWith("file://") then s.drop("file://".length)
+      else if s.startsWith("file:") then s.drop("file:".length)
+      else s
+    Path(stripped)
 
   private def pathToUri(p: Path): DocumentUri =
-    DocumentUri(s"file:${p.absolute.toString}")
+    DocumentUri(s"file://${p.absolute.toString}")
+
+  // Canonicalize a URI the client sent (may be `file:///x` or `file:/x`) into
+  // the same form we use as map keys. Applied on every request handler entry
+  // point that looks the URI up in state.
+  def normalizeUri(u: DocumentUri): DocumentUri =
+    pathToUri(uriToPath(u))
 
   def parseAndIndex(
       uri: DocumentUri,
@@ -44,9 +60,10 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       documentUri: DocumentUri,
       back: Communicate[IO]
   ): IO[Unit] =
+    val nu = normalizeUri(documentUri)
     state.get.flatMap { m =>
-      if m.contains(documentUri) then IO.unit
-      else recompile(documentUri, back)
+      if m.contains(nu) then IO.unit
+      else recompile(nu, back)
     }
 
   /** Force a reparse from disk. Used by `didSave`. Publishes any parse error
@@ -54,21 +71,22 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
     * those block the editor); clears diagnostics on success.
     */
   def recompile(documentUri: DocumentUri, back: Communicate[IO]): IO[Unit] =
+    val nu = normalizeUri(documentUri)
     Files[IO]
-      .readUtf8(uriToPath(documentUri))
+      .readUtf8(uriToPath(nu))
       .compile
       .string
       .flatMap { str =>
-        parseAndIndex(documentUri, str) match
+        parseAndIndex(nu, str) match
           case Left(err) =>
-            back.publish(documentUri, Vector(parseErrorDiagnostic(err)))
+            back.publish(nu, Vector(parseErrorDiagnostic(err)))
           case Right(idx) =>
-            state.update(_.updated(documentUri, idx)) *>
-              back.publish(documentUri, Vector.empty)
+            state.update(_.updated(nu, idx)) *>
+              back.publish(nu, Vector.empty)
       }
       .handleErrorWith { e =>
         scribe.cats.io.warn(
-          s"recompile: I/O error on $documentUri: ${e.getMessage}"
+          s"recompile: I/O error on $nu: ${e.getMessage}"
         )
       }
 
@@ -205,19 +223,20 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       uri: DocumentUri,
       position: Position
   ): IO[List[Location]] =
+    val nu = normalizeUri(uri)
     state.get.flatMap { all =>
-      all.get(uri) match
+      all.get(nu) match
         case None => IO.pure(Nil)
         case Some(idx) =>
           val caret = toCaretAt(idx, position)
           val local = idx.detectReferences
             .resolve(caret)
             .flatMap(idx.definitions.get)
-            .map(sp => Location(uri, sp.toRange))
+            .map(sp => Location(nu, sp.toRange))
           val localFuncs = idx.functionReferences
             .resolve(caret)
             .flatMap(idx.functionDefinitions.get)
-            .map(sp => Location(uri, sp.toRange))
+            .map(entry => Location(nu, entry.nameSpan.toRange))
           val crossFile =
             if local.isEmpty && localFuncs.isEmpty then
               idx.functionReferences.resolve(caret).flatMap { name =>
@@ -236,8 +255,9 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       uri: DocumentUri,
       position: Position
   ): IO[Vector[Location]] =
+    val nu = normalizeUri(uri)
     state.get.flatMap { all =>
-      all.get(uri) match
+      all.get(nu) match
         case None => IO.pure(Vector.empty)
         case Some(idx) =>
           val caret = toCaretAt(idx, position)
@@ -245,7 +265,7 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
           // site (via functionReferences) or from the definition itself.
           val nameFromRef = idx.functionReferences.resolve(caret)
           val nameFromDef = idx.functionDefinitions.collect {
-            case (n, sp) if sp.contains(caret) => n
+            case (n, entry) if entry.nameSpan.contains(caret) => n
           }
           val names = (nameFromRef ++ nameFromDef).toSet
           if names.isEmpty then IO.pure(Vector.empty)
@@ -268,10 +288,10 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       val q = query.toLowerCase
       all.toVector.flatMap { case (u, idx) =>
         idx.functionDefinitions.collect {
-          case (name, sp) if q.isEmpty || name.toLowerCase.contains(q) =>
+          case (name, entry) if q.isEmpty || name.toLowerCase.contains(q) =>
             SymbolInformation(
               name = s"@$name",
-              location = Location(u, sp.toRange),
+              location = Location(u, entry.nameSpan.toRange),
               kind = SymbolKind.Function
             )
         }
@@ -282,11 +302,15 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       all: Map[DocumentUri, Index],
       name: String
   ): Option[(DocumentUri, Span)] =
-    all.iterator
-      .flatMap { case (u, idx) =>
-        idx.functionDefinitions.get(name).map(sp => (u, sp))
-      }
-      .nextOption()
+    // Prefer entries from files that have a `define`; only fall back to a
+    // `declare` if no `define` exists anywhere in the workspace.
+    val hits = all.iterator.flatMap { case (u, idx) =>
+      idx.functionDefinitions.get(name).map(entry => (u, entry))
+    }.toVector
+    hits
+      .find(_._2.kind == FunctionDefKind.Define)
+      .orElse(hits.headOption)
+      .map((u, entry) => (u, entry.nameSpan))
 
   /** LSP semantic-tokens delta encoding over this file's function-name
     * spans. All spans emitted with tokenType=0 (see SemanticTokensLegend
@@ -324,32 +348,41 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
     val fromRef = idx.functionReferences.entries
       .collectFirst { case (sp, n) if sp.contains(caret) => (n, sp) }
     fromRef.orElse(
-      idx.functionDefinitions
-        .collectFirst { case (n, sp) if sp.contains(caret) => (n, sp) }
+      idx.functionDefinitions.collectFirst {
+        case (n, entry) if entry.nameSpan.contains(caret) => (n, entry.nameSpan)
+      }
     )
 
-  /** Look up where a function is defined across every indexed file. Returns
-    * the defining file's URI, the definition-name span, and the first `n`
-    * lines of the definition (starting at the line the name occupies).
+  /** Look up where a function is defined across every indexed file. Prefers a
+    * `define` over a `declare` when both exist. Returns the defining file's
+    * URI, the name span, and a source snippet clamped to the actual body
+    * (single line for `declare`, up to `previewLines` for `define`).
     */
   def lookupFunctionDefinition(
       name: String,
       previewLines: Int = 5
   ): IO[Option[(DocumentUri, Span, String)]] =
     state.get.map { all =>
-      all.iterator
-        .flatMap { case (u, idx) =>
-          idx.functionDefinitions.get(name).map(sp => (u, idx, sp))
-        }
-        .nextOption()
-        .map { case (uri, idx, sp) =>
+      val hits = all.iterator.flatMap { case (u, idx) =>
+        idx.functionDefinitions.get(name).map(entry => (u, idx, entry))
+      }.toVector
+      hits
+        .find(_._3.kind == FunctionDefKind.Define)
+        .orElse(hits.headOption)
+        .map { case (uri, idx, entry) =>
           val lines = idx.text.text.linesIterator.toVector
-          val start = sp.from.line
-          val end   = math.min(lines.size, start + previewLines)
+          val start = entry.nameSpan.from.line
+          // Clamp by both the caller's request and the entry's actual end
+          // line, so declares yield one line and defines never bleed into
+          // whatever comes after the closing `}`.
+          val end = math.min(
+            lines.size,
+            math.min(start + previewLines, entry.endLine + 1)
+          )
           val snippet =
             if start >= lines.size then ""
             else lines.slice(start, end).mkString("\n")
-          (uri, sp, snippet)
+          (uri, entry.nameSpan, snippet)
         }
     }
 
@@ -377,7 +410,10 @@ private trait UtilsCommon:
     val caret     = position.toCaret(cursorPosition)
     val mdSpans   = idx.detectReferences.resolve(caret).flatMap(idx.definitions.get)
     val funcSpans =
-      idx.functionReferences.resolve(caret).flatMap(idx.functionDefinitions.get)
+      idx.functionReferences
+        .resolve(caret)
+        .flatMap(idx.functionDefinitions.get)
+        .map(_.nameSpan)
     IO.pure(mdSpans ++ funcSpans)
 end UtilsCommon
 

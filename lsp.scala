@@ -12,7 +12,7 @@ import langoustine.lsp.enumerations.*
 
 import SpannedTree.*
 
-object LLVM_Lsp extends LangoustineApp.Simple:
+object LLVM_Lsp extends LangoustineApp:
   // stdout is reserved for LSP JSON-RPC framing — never write logs there.
   // We log to `./llvm-ir-lsp.log` (relative to the CWD of the launched
   // process, which is typically the client's workspace root).
@@ -28,11 +28,19 @@ object LLVM_Lsp extends LangoustineApp.Simple:
     )
     .replace()
 
-  def server: IO[LSPBuilder[cats.effect.IO]] =
-    scribe.cats.io.info(s"LLVM LSP starting, logging to $logFile") *>
-      IO.ref(Map.empty).map(lsp)
+  def server(args: List[String]): Resource[IO, LSPBuilder[IO]] =
+    for
+      _          <- Resource.eval(
+                      scribe.cats.io.info(s"LLVM LSP starting, logging to $logFile")
+                    )
+      supervisor <- cats.effect.std.Supervisor[IO]
+      state      <- Resource.eval(IO.ref(Map.empty[DocumentUri, Index]))
+    yield lsp(state, supervisor)
 
-def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
+def lsp(
+    state: Ref[IO, Map[DocumentUri, Index]],
+    supervisor: cats.effect.std.Supervisor[IO]
+) =
   val utils = Utils(state)
   LSPBuilder
     .create[IO]
@@ -42,23 +50,31 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
       val clientProgress = in.params.capabilities.window
         .flatMap(_.workDoneProgress)
         .getOrElse(false)
-      scribe.cats.io.info(
-        s"initialize: rootUri=${in.params.rootUri}, folders=${folders
-            .map(_.uri.value)
-            .mkString(",")}, clientSupportsProgress=$clientProgress"
-      ) *>
+      // Kick off the workspace scan in the background under the server-scoped
+      // Supervisor. `initialize` returns immediately so Neovim isn't blocked
+      // for the multi-second scan; requests that need the index (goto-def,
+      // hover, symbol) will just see partial results until the scan finishes.
+      val scanFiber =
         utils.scanWorkspace(
           folders,
           back = Some(in.toClient),
           clientSupportsProgress = clientProgress
         ) *>
-        state.get.flatMap { m =>
-          scribe.cats.io.info(
-            s"initialize: scanned ${m.size} .ll file(s); total function definitions: ${m.values
-                .map(_.functionDefinitions.size)
-                .sum}"
-          )
-        } *>
+          state.get.flatMap { m =>
+            scribe.cats.io.info(
+              s"scanWorkspace done: ${m.size} .ll file(s); total function definitions: ${m.values
+                  .map(_.functionDefinitions.size)
+                  .sum}"
+            )
+          }
+      scribe.cats.io.info(
+        s"initialize: rootUri=${in.params.rootUri}, folders=${folders
+            .map(_.uri.value)
+            .mkString(",")}, clientSupportsProgress=$clientProgress"
+      ) *>
+        supervisor.supervise(scanFiber.handleErrorWith { e =>
+          scribe.cats.io.error(s"scanWorkspace crashed: ${e.getMessage}")
+        }).void *>
         IO {
           InitializeResult(
             capabilities = ServerCapabilities(
@@ -141,7 +157,7 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
               val caret       = utils.caretAt(idx, pos)
               val nameFromRef = idx.functionReferences.resolve(caret)
               val nameFromDef = idx.functionDefinitions.collect {
-                case (n, sp) if sp.contains(caret) => n
+                case (n, entry) if entry.nameSpan.contains(caret) => n
               }.toList
               scribe.cats.io.info(
                 s"  caret=$caret; nameFromRef=$nameFromRef; nameFromDef=$nameFromDef"
@@ -213,7 +229,7 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
       }
     }
     .handleRequest(textDocument.documentSymbol) { in =>
-      val uri = in.params.textDocument.uri
+      val uri = utils.normalizeUri(in.params.textDocument.uri)
       scribe.cats.io.info(s"textDocument/documentSymbol: uri=$uri") *>
         state.get.flatMap(_.get(uri) match
           case None =>
@@ -237,11 +253,11 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
                 )
               }
             val funcSyms = idx.functionDefinitions.toVector
-              .sortBy(_._2.from.offset)
-              .map { case (name, span) =>
+              .sortBy(_._2.nameSpan.from.offset)
+              .map { case (name, entry) =>
                 SymbolInformation(
                   name = s"@$name",
-                  location = Location(uri, span.toRange),
+                  location = Location(uri, entry.nameSpan.toRange),
                   kind = SymbolKind.Function
                 )
               }
@@ -251,7 +267,7 @@ def lsp(state: Ref[IO, Map[DocumentUri, Index]]) =
         )
     }
     .handleRequest(textDocument.semanticTokens.full) { in =>
-      val uri = in.params.textDocument.uri
+      val uri = utils.normalizeUri(in.params.textDocument.uri)
       scribe.cats.io.info(s"textDocument/semanticTokens/full: uri=$uri") *>
         state.get.flatMap(_.get(uri) match
           case None =>
