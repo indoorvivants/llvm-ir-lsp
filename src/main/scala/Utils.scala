@@ -211,7 +211,7 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
       total: Int
   )(work: ((Int, String) => IO[Unit]) => IO[Unit]): IO[Unit] =
     import io.circe.syntax.EncoderOps
-    val token = aliases.ProgressToken(java.util.UUID.randomUUID().toString)
+    val token = aliases.ProgressToken(Ids.randomId())
     val create = back
       .request(
         window.workDoneProgress.create,

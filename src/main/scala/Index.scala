@@ -1,6 +1,6 @@
 package llvm_lsp
 
-enum FunctionDefKind:
+enum FunctionDefKind derives CanEqual:
   case Define, Declare
 
 case class FunctionDefEntry(
