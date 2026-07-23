@@ -1,0 +1,3 @@
+[submodule "langoustine"]
+	path = langoustine
+	url = https://github.com/neandertech/langoustine.git
