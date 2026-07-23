@@ -22,7 +22,7 @@ libraryDependencies ++= Seq(
   "org.typelevel" %% "weaver-cats" % "0.13.0" % Test,
   "org.scalameta" %% "munit"       % "1.3.4"  % Test
 )
-buildBinaryConfig ~= { _.withName("sniper") }
+buildBinaryConfig ~= { _.withName("llvm-ir-lsp") }
 
 nativeLink / nativeConfig ~= {
   import scala.scalanative.build.*
