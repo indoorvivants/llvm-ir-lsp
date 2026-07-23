@@ -163,6 +163,44 @@ class Utils(state: Ref[IO, Map[DocumentUri, Index]]) extends UtilsCommon:
         scribe.cats.io.warn(s"scanWorkspace: I/O error on $p: ${e.getMessage}")
       }
 
+  /** Watch every workspace root recursively for `.ll` file changes. On a
+    * Created/Modified event, reindex the file. On Deleted, drop the entry.
+    * Runs forever (drains the event stream) — caller should launch it under
+    * a Supervisor so it's cancelled at server shutdown.
+    */
+  def watchWorkspace(folders: Vector[WorkspaceFolder]): IO[Unit] =
+    if folders.isEmpty then IO.unit
+    else
+      fs2.io.file.Watcher.default[IO].use { watcher =>
+        val register = folders.traverse_ { folder =>
+          val root = Path(folder.uri.value.stripPrefix("file://").stripPrefix("file:"))
+          watcher.watch(
+            root,
+            types = Seq(
+              fs2.io.file.Watcher.EventType.Created,
+              fs2.io.file.Watcher.EventType.Modified,
+              fs2.io.file.Watcher.EventType.Deleted
+            )
+          ).void
+        }
+        val consume = watcher
+          .events()
+          .evalMap {
+            case fs2.io.file.Watcher.Event.Created(p, _) if p.extName == ".ll" =>
+              scribe.cats.io.info(s"watch: Created $p") *> indexOne(p)
+            case fs2.io.file.Watcher.Event.Modified(p, _) if p.extName == ".ll" =>
+              scribe.cats.io.info(s"watch: Modified $p") *> indexOne(p)
+            case fs2.io.file.Watcher.Event.Deleted(p, _) if p.extName == ".ll" =>
+              val uri = pathToUri(p)
+              scribe.cats.io.info(s"watch: Deleted $p") *>
+                state.update(_ - uri)
+            case _ => IO.unit
+          }
+          .compile
+          .drain
+        register *> consume
+      }
+
   /** Bracket work with LSP $/progress begin/report/end notifications. The
     * `report` callback advances a percentage counter (0..100 clipped) with an
     * optional message.

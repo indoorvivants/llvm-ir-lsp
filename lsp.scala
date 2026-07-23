@@ -67,6 +67,10 @@ def lsp(
                   .sum}"
             )
           }
+      val watchFiber =
+        utils.watchWorkspace(folders).handleErrorWith { e =>
+          scribe.cats.io.error(s"watchWorkspace crashed: ${e.getMessage}")
+        }
       scribe.cats.io.info(
         s"initialize: rootUri=${in.params.rootUri}, folders=${folders
             .map(_.uri.value)
@@ -75,6 +79,7 @@ def lsp(
         supervisor.supervise(scanFiber.handleErrorWith { e =>
           scribe.cats.io.error(s"scanWorkspace crashed: ${e.getMessage}")
         }).void *>
+        supervisor.supervise(watchFiber).void *>
         IO {
           InitializeResult(
             capabilities = ServerCapabilities(
@@ -235,35 +240,77 @@ def lsp(
           case None =>
             scribe.cats.io.warn(s"  no index for $uri") *> IO.pure(None)
           case Some(idx) =>
+            // DocumentSymbol (hierarchical) is what modern pickers prefer.
+            // Filter out any entries with an empty or degenerate range —
+            // Neovim's built-in picker silently drops the entire response
+            // when it hits a malformed range.
+            def safeRange(r: Range): Boolean =
+              val ls = r.start.line.value
+              val le = r.end.line.value
+              val cs = r.start.character.value
+              val ce = r.end.character.value
+              ls >= 0 && le >= ls && (le > ls || ce >= cs)
             val mdSyms = idx.definitions.toVector
-              // IDs can be numeric (`!17`) or named (`!llvm.dbg.cu`). Sort
-              // numerics first (by int value) then named (lexicographically)
-              // — never call .toInt on a non-numeric id, that used to crash.
               .sortBy { case (ref, _) =>
                 val s = ref.id.toString
                 s.toIntOption match
                   case Some(n) => (0, n, "")
                   case None    => (1, 0, s)
               }
-              .map { case (ref, span) =>
-                SymbolInformation(
-                  name = s"!${ref.id}",
-                  location = Location(uri, span.toRange),
-                  kind = SymbolKind.Variable
-                )
+              .flatMap { case (ref, span) =>
+                val r = span.toRange
+                if !safeRange(r) then None
+                else
+                  Some(
+                    DocumentSymbol(
+                      name = s"!${ref.id}",
+                      kind = SymbolKind.Variable,
+                      range = r,
+                      selectionRange = r
+                    )
+                  )
               }
-            val funcSyms = idx.functionDefinitions.toVector
+            // Neovim's built-in picker (and snacks.nvim's) silently drop
+            // documentSymbol responses with thousands of entries. Cap
+            // functions until we implement proper hierarchical grouping.
+            val functionSymbolCap = 200
+            val allFuncs = idx.functionDefinitions.toVector
               .sortBy(_._2.nameSpan.from.offset)
-              .map { case (name, entry) =>
-                SymbolInformation(
-                  name = s"@$name",
-                  location = Location(uri, entry.nameSpan.toRange),
-                  kind = SymbolKind.Function
+              .flatMap { case (name, entry) =>
+                val selection = entry.nameSpan.toRange
+                val startLine = entry.nameSpan.from.line
+                // LSP requires selectionRange ⊆ range. For a `declare` (one
+                // line) that means range must at minimum cover the whole
+                // line the name sits on. For a `define`, `entry.endLine` is
+                // the closing `}` line; use end-of-that-line so we contain
+                // the full brace. Neovim's picker validates the containment
+                // and silently drops the WHOLE response if any entry fails.
+                val endLine = math.max(entry.endLine, startLine)
+                val endChar =
+                  if endLine > startLine then 0
+                  else math.max(selection.end.character.value, 1)
+                val fullRange = Range(
+                  Position(line = startLine, character = 0),
+                  Position(line = endLine, character = endChar)
                 )
+                if name.isEmpty || !safeRange(selection) then None
+                else
+                  Some(
+                    DocumentSymbol(
+                      name = s"@$name",
+                      detail = Option(entry.kind.toString.toLowerCase),
+                      kind = SymbolKind.Function,
+                      range = if safeRange(fullRange) then fullRange else selection,
+                      selectionRange = selection
+                    )
+                  )
               }
+            val funcSyms = allFuncs.take(functionSymbolCap)
+            val truncated = allFuncs.size - funcSyms.size
+            val all = mdSyms ++ funcSyms
             scribe.cats.io.info(
-              s"  -> ${mdSyms.size} metadata + ${funcSyms.size} function symbol(s)"
-            ) *> IO.pure(Some(mdSyms ++ funcSyms))
+              s"  -> ${mdSyms.size} metadata + ${funcSyms.size} function symbol(s) (${all.size} total; $truncated function(s) truncated)"
+            ) *> IO.pure(Some(all))
         )
     }
     .handleRequest(textDocument.semanticTokens.full) { in =>
