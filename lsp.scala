@@ -207,7 +207,7 @@ def lsp(
                 IO.pure(
                   Some(
                     Hover(
-                      contents = MarkedString(MarkedString.S0("markdown", body)),
+                      contents = MarkupContent(MarkupKind.Markdown, body),
                       range = Option(span.toRange)
                     )
                   )
@@ -270,11 +270,7 @@ def lsp(
                     )
                   )
               }
-            // Neovim's built-in picker (and snacks.nvim's) silently drop
-            // documentSymbol responses with thousands of entries. Cap
-            // functions until we implement proper hierarchical grouping.
-            val functionSymbolCap = 200
-            val allFuncs = idx.functionDefinitions.toVector
+            val funcSyms = idx.functionDefinitions.toVector
               .sortBy(_._2.nameSpan.from.offset)
               .flatMap { case (name, entry) =>
                 val selection = entry.nameSpan.toRange
@@ -283,8 +279,7 @@ def lsp(
                 // line) that means range must at minimum cover the whole
                 // line the name sits on. For a `define`, `entry.endLine` is
                 // the closing `}` line; use end-of-that-line so we contain
-                // the full brace. Neovim's picker validates the containment
-                // and silently drops the WHOLE response if any entry fails.
+                // the full brace.
                 val endLine = math.max(entry.endLine, startLine)
                 val endChar =
                   if endLine > startLine then 0
@@ -305,11 +300,9 @@ def lsp(
                     )
                   )
               }
-            val funcSyms = allFuncs.take(functionSymbolCap)
-            val truncated = allFuncs.size - funcSyms.size
             val all = mdSyms ++ funcSyms
             scribe.cats.io.info(
-              s"  -> ${mdSyms.size} metadata + ${funcSyms.size} function symbol(s) (${all.size} total; $truncated function(s) truncated)"
+              s"  -> ${mdSyms.size} metadata + ${funcSyms.size} function symbol(s) (${all.size} total)"
             ) *> IO.pure(Some(all))
         )
     }
