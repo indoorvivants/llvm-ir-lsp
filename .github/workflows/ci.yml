@@ -108,9 +108,9 @@ jobs:
             %LocalAppData%\sbt\v2
           key: ${{ runner.os }}-sbt2
 
-      - name: Build the binary
-        run: |
-          sbt buildBinaryPlatformRelease
+      # - name: Build the binary
+      #   run: |
+      #     sbt buildBinaryPlatformRelease
 
       # - name: Upload artifacts
       #   uses: actions/upload-artifact@v4
