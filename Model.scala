@@ -1,9 +1,10 @@
 package llvm_lsp
 
-opaque type Id = Int
+opaque type Id = String
 object Id:
-  inline def apply(i: Int): Id             = i
-  extension (id: Id) inline def value: Int = id
+  inline def apply(i: Int): Id                = i.toString
+  inline def apply(i: String): Id             = i
+  extension (id: Id) inline def intValue: Int = id.toInt
 
 opaque type LocalID = String
 object LocalID:
@@ -38,9 +39,13 @@ trait Metadata[F[_]]:
   case class NamedData(struct: Struct, fields: Vector[Field])
       extends Expression[F]
 
+  case object NULL
+
   enum FunctionCallParam:
     case Num(value: Int, tpe: String)
-    case Ptr(what: F[String])
+    case Ptr(what: F[String] | NULL.type)
+    case TypedRef(tpe: String, what: F[String])
+    case Metadata(arg: FunctionCallParam | Expression[F])
 
   enum Instruction:
     case Call(
@@ -63,6 +68,10 @@ trait Metadata[F[_]]:
         attrs: (Option[String], Option[String], Option[String], Option[String]),
         func: Function,
         body: Vector[BodyOperation]
+    )
+    case Declare(
+        attrs: (Option[String], Option[String], Option[String], Option[String]),
+        func: Function
     )
     case Unknown(raw: String)
 

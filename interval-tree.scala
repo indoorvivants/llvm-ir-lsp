@@ -3,6 +3,7 @@ package llvm_lsp
 trait IntervalTree[T]:
   def resolve(position: Caret): List[T] = resolve(position.offset)
   def resolve(offset: Int): List[T]
+  def entries: Iterable[(Span, T)]
 
 object IntervalTree:
   def construct[T](mp: Map[Span, T]): IntervalTree[T] =
@@ -34,6 +35,7 @@ object IntervalTree:
   end construct
 
   private class Impl[T](tree: Tree, mp: Map[Span, T]) extends IntervalTree[T]:
+    override def entries: Iterable[(Span, T)] = mp
     override def resolve(offset: Int): List[T] =
       import Tree.*
       def go(t: Tree): List[Span] =
