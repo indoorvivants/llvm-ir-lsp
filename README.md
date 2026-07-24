@@ -19,7 +19,7 @@ engineers targeting LLVM IR in text form.
 - [x] go to definition (functions)
 - [x] hover
 
-<img width="3140" height="1938" alt="CleanShot 2026-07-24 at 10 25 27@2x" src="https://github.com/user-attachments/assets/c00ad12b-ade6-4e0c-aa46-a00ac92fe502" />
+<img width="3316" height="2114" alt="CleanShot 2026-07-24 at 10 25 27@2x" src="https://github.com/user-attachments/assets/e56167ca-e425-495c-b3b0-c194696fa68a" />
 
 
 ## Installation
