@@ -8,7 +8,7 @@
     - [VS Code](#vs-code)
 <!--toc:end-->
 
-This is an experimental [Language Server](https://microsoft.github.io/language-server-protocol/) to work with [LLVM IR](https://www.llvm.org/docs/LangRef.html) - the `.ll` files produced by compiler frontends.
+This is an small [Language Server](https://microsoft.github.io/language-server-protocol/) to work with [LLVM IR in textual form](https://www.llvm.org/docs/LangRef.html) - the `.ll` files produced by compiler frontends.
 
 It's not designed for editing, just supporting basic parsing and navigation, assuming read only mode. Should be useful for compiler 
 engineers targeting LLVM IR in text form.
@@ -18,6 +18,9 @@ engineers targeting LLVM IR in text form.
 - [x] find references (functions from call instructions)
 - [x] go to definition (functions)
 - [x] hover
+
+<img width="3140" height="1938" alt="CleanShot 2026-07-24 at 10 25 27@2x" src="https://github.com/user-attachments/assets/c00ad12b-ade6-4e0c-aa46-a00ac92fe502" />
+
 
 ## Installation
 
