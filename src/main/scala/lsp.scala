@@ -11,31 +11,26 @@ import langoustine.lsp.app.*
 import langoustine.lsp.enumerations.*
 
 import SpannedTree.*
+import java.nio.file.Paths
 
 object LLVM_Lsp extends LangoustineApp:
-  // stdout is reserved for LSP JSON-RPC framing — never write logs there.
-  // We log to `./llvm-ir-lsp.log` (relative to the CWD of the launched
-  // process, which is typically the client's workspace root).
-  private val logFile =
-    java.nio.file.Paths.get("llvm-ir-lsp.log").toAbsolutePath
   scribe.Logger.root
     .clearHandlers()
     .withHandler(
-      writer = scribe.file.FileWriter(
-        pathBuilder = scribe.file.PathBuilder.static(logFile)
-      ),
-      minimumLevel = Some(scribe.Level.Debug)
+      writer = scribe.writer.SystemErrWriter,
+      outputFormat = scribe.output.format.ANSIOutputFormat
     )
     .replace()
 
   def server(args: List[String]): Resource[IO, LSPBuilder[IO]] =
     for
-      _          <- Resource.eval(
-                      scribe.cats.io.info(s"LLVM LSP starting, logging to $logFile")
-                    )
+      _ <- Resource.eval(
+        scribe.cats.io.info(s"LLVM LSP starting, logging to STDERR")
+      )
       supervisor <- cats.effect.std.Supervisor[IO]
       state      <- Resource.eval(IO.ref(Map.empty[DocumentUri, Index]))
     yield lsp(state, supervisor)
+end LLVM_Lsp
 
 def lsp(
     state: Ref[IO, Map[DocumentUri, Index]],
@@ -76,9 +71,11 @@ def lsp(
             .map(_.uri.value)
             .mkString(",")}, clientSupportsProgress=$clientProgress"
       ) *>
-        supervisor.supervise(scanFiber.handleErrorWith { e =>
-          scribe.cats.io.error(s"scanWorkspace crashed: ${e.getMessage}")
-        }).void *>
+        supervisor
+          .supervise(scanFiber.handleErrorWith { e =>
+            scribe.cats.io.error(s"scanWorkspace crashed: ${e.getMessage}")
+          })
+          .void *>
         supervisor.supervise(watchFiber).void *>
         IO {
           InitializeResult(
@@ -119,7 +116,7 @@ def lsp(
               case None =>
                 scribe.cats.io.warn(s"  no index for $uri") *> IO.pure(None)
               case Some(idx) =>
-                val caret = utils.caretAt(idx, pos)
+                val caret  = utils.caretAt(idx, pos)
                 val mdHits =
                   idx.detectReferences.resolve(caret)
                 val funcHits = idx.functionReferences.resolve(caret)
@@ -141,10 +138,8 @@ def lsp(
                               s"Unexpectedly, got several definitions: $tail"
                             )
                           Some(Definition(head))
-                        case Nil => None
-                      )
-                  }
-            )
+                        case Nil => None)
+                  })
         }
     }
     .handleRequest(textDocument.references) { in =>
@@ -190,28 +185,31 @@ def lsp(
         val caret = utils.caretAt(idx, in.params.position)
         utils.functionNameAt(idx, caret) match
           case Some((name, span)) =>
-            utils.lookupFunctionDefinition(name, previewLines = 5).flatMap { defn =>
-              val demangled = utils.demangle(name)
-              val header =
-                if demangled == name then s"### `@$name`"
-                else s"### `@$name`\n\n$demangled"
-              val body = defn match
-                case Some((defUri, _, snippet)) =>
-                  val defined = defUri.value.stripPrefix("file://").stripPrefix("file:")
-                  s"$header\n\n_Defined in_ `$defined`\n\n```llvm\n$snippet\n```"
-                case None =>
-                  s"$header\n\n_Definition not found in workspace._"
-              scribe.cats.io.info(
-                s"textDocument/hover: function=$name defnFound=${defn.isDefined}"
-              ) *>
-                IO.pure(
-                  Some(
-                    Hover(
-                      contents = MarkupContent(MarkupKind.Markdown, body),
-                      range = Option(span.toRange)
+            utils.lookupFunctionDefinition(name, previewLines = 5).flatMap {
+              defn =>
+                val demangled = utils.demangle(name)
+                val header    =
+                  if demangled == name then s"### `@$name`"
+                  else s"### `@$name`\n\n$demangled"
+                val body = defn match
+                  case Some((defUri, _, snippet)) =>
+                    val defined =
+                      defUri.value.stripPrefix("file://").stripPrefix("file:")
+                    val filename = Paths.get(defined).getFileName()
+                    s"$header\n\n_Defined in_ [$filename]($defined)\n\n```llvm\n$snippet\n```"
+                  case None =>
+                    s"$header\n\n_Definition not found in workspace._"
+                scribe.cats.io.info(
+                  s"textDocument/hover: function=$name defnFound=${defn.isDefined}"
+                ) *>
+                  IO.pure(
+                    Some(
+                      Hover(
+                        contents = MarkupContent(MarkupKind.Markdown, body),
+                        range = Option(span.toRange)
+                      )
                     )
                   )
-                )
             }
           case None =>
             // Fall back to metadata-reference hover: resolve to definition
@@ -231,6 +229,7 @@ def lsp(
                 )
               case _ => None
             }
+        end match
       }
     }
     .handleRequest(textDocument.documentSymbol) { in =>
@@ -269,6 +268,7 @@ def lsp(
                       selectionRange = r
                     )
                   )
+                end if
               }
             val funcSyms = idx.functionDefinitions.toVector
               .sortBy(_._2.nameSpan.from.offset)
@@ -295,16 +295,17 @@ def lsp(
                       name = s"@$name",
                       detail = Option(entry.kind.toString.toLowerCase),
                       kind = SymbolKind.Function,
-                      range = if safeRange(fullRange) then fullRange else selection,
+                      range =
+                        if safeRange(fullRange) then fullRange else selection,
                       selectionRange = selection
                     )
                   )
+                end if
               }
             val all = mdSyms ++ funcSyms
             scribe.cats.io.info(
               s"  -> ${mdSyms.size} metadata + ${funcSyms.size} function symbol(s) (${all.size} total)"
-            ) *> IO.pure(Some(all))
-        )
+            ) *> IO.pure(Some(all)))
     }
     .handleRequest(textDocument.semanticTokens.full) { in =>
       val uri = utils.normalizeUri(in.params.textDocument.uri)
@@ -324,8 +325,7 @@ def lsp(
                     data = data.map(i => runtime.uinteger(i))
                   )
                 )
-              )
-        )
+              ))
     }
     .handleNotification(textDocument.didOpen) { in =>
       val uri = in.params.textDocument.uri
