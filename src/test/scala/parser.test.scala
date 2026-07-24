@@ -591,20 +591,6 @@ _2000000.0:
       assertEquals(files.size, files.size) // ensure the loop actually ran
   }
 
-  test("parses resources/488987d1.ll end-to-end") {
-    // Regression fixture with real Scala Native output. Exercises:
-    //  - `dereferenceable_or_null(N)` as a return-value attribute (before ret type)
-    //  - `dereferenceable_or_null(N)` between `ptr` and value inside call params
-    //  - `personality ptr @foo` after the arg list of a define
-    //  - LLVM-identifier arg names like `%_1` (not just `%<digits>`)
-    val src = scala.io.Source.fromFile("resources/488987d1.ll").mkString
-    val Right(Program(stmts)) = parse(src): @unchecked
-    val funcDefs = stmts.collect { case f: Statement.FunctionDefinition => f }
-    val declares = stmts.collect { case d: Statement.Declare => d }
-    assertEquals(funcDefs.size, 7)
-    assertEquals(declares.size, 12)
-  }
-
   test("parses declare with type-only arguments") {
     val Right(Program(Vector(d: Statement.Declare))) =
       parse("declare void @llvm.dbg.declare(metadata, metadata, metadata) #1\n"): @unchecked

@@ -10,6 +10,9 @@ import langoustine.lsp.structures.Position
 
 import SpannedParsers.*
 import tree.Program
+import langoustine.lsp.runtime.DocumentUri
+
+given CanEqual[DocumentUri, DocumentUri] = CanEqual.derived
 
 object IndexSpec extends weaver.SimpleIOSuite:
   test("full file indexing") {
