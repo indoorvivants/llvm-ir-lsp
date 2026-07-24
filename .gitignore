@@ -2,7 +2,6 @@
 .metals
 .scala-build
 bin/
-resources
 .mcp.json
 .langoustine 
 .scribe
